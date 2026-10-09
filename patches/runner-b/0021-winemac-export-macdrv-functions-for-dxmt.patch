@@ -1,0 +1,164 @@
+winemac.drv: export the macdrv_functions table DXMT's winemetal.so looks up.
+
+Runner B (steamplay-mac), stage B2. DXMT's unix side (src/winemetal/unix/winemetal_unix.c,
+3Shain/dxmt 7c8dee1 and v0.80) creates its CAMetalLayer with
+dlsym(RTLD_DEFAULT, "macdrv_functions") and falls back to dlsym of get_win_data,
+release_win_data, macdrv_view_create_metal_view and macdrv_view_get_metal_layer. Upstream Wine
+builds winemac.so with hidden visibility, so neither is found and DXMT gets a device but no
+swapchain. CrossOver exports the table; upstream does not.
+
+New file dlls/winemac.drv/dxmt_export.c exports the table with default visibility. It is a port
+of leonseemann/NotProton winemac-patch/dxmt_export.c (GPL-3, written for Wine 11.15; commit
+d56e28e0, file sha256 66056ac563453a64...) to the wine-11.18 winemac API:
+- macdrv_CreateClientSurface() takes (hwnd, pixel_format, raw); called as (hwnd, 0, FALSE),
+  the arguments win32u's Vulkan path uses;
+- macdrv_window / macdrv_view / macdrv_metal_{device,view,layer} are now WineWindow,
+  WineContentView, id_MTLDevice, WineMetalView and CAMetalLayer;
+- a NULL 10th slot (on_main_thread) so the table is as large as DXMT's struct; DXMT never
+  calls it.
+DXMT reads slots 1 (get_win_data), 2 (release_win_data), 6 (view_create_metal_view),
+7 (view_get_metal_layer) and 8 (view_release_metal_view), and only client_cocoa_view from the
+win data. ntdll dlopens unix libraries with RTLD_NOW, which is RTLD_GLOBAL on macOS, so
+dlsym(RTLD_DEFAULT) finds the table.
+
+Licence: dxmt_export.c is GPL-3.0 (attribution kept in the file); winemac.so built with it is
+distributed under the GPL-3.0 as a whole. The Makefile.in hunk is LGPL-2.1-or-later like the
+file it changes.
+
+Known limitation (same as the 11.15 original): the client surface made on demand is not on
+win32u's surface lists, so it is not detached or freed before the window is destroyed.
+
+Written against wine-11.18 (tag wine-11.18, commit 7b3fff76f). Upstream status: none; drop if
+DXMT or upstream winemac grow another way to reach the client view.
+
+--- a/dlls/winemac.drv/Makefile.in
++++ b/dlls/winemac.drv/Makefile.in
+@@ -28,6 +28,7 @@
+ 	cocoa_window.m \
+ 	display.c \
+ 	dllmain.c \
++	dxmt_export.c \
+ 	event.c \
+ 	gdi.c \
+ 	image.c \
+--- /dev/null
++++ b/dlls/winemac.drv/dxmt_export.c
+@@ -0,0 +1,118 @@
++/*
++ * Exports the macdrv entry points DXMT's winemetal.so looks up with dlsym. Upstream Wine
++ * hides them, and DXMT's view of struct macdrv_win_data predates the client_view rename,
++ * so get_win_data hands out a copy in the layout DXMT expects.
++ *
++ * Copyright (C) 2026 Leon Seemann (NotProton, winemac-patch/dxmt_export.c, written for
++ *   Wine 11.15; https://github.com/leonseemann/NotProton at d56e28e0, file sha256 66056ac5...)
++ * Copyright (C) 2026 steamplay-mac contributors (port to the Wine 11.18 winemac API)
++ *
++ * This program is free software: you can redistribute it and/or modify it under the terms of
++ * the GNU General Public License version 3 as published by the Free Software Foundation
++ * (NotProton's NOTICE licenses its code "under GPLV3"; the full text is its LICENSE file).
++ *
++ * This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
++ * without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
++ * See the GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License along with this program.
++ * If not, see <https://www.gnu.org/licenses/>.
++ *
++ * Note: this file is GPL-3.0, so a winemac.so built with it is distributed under the
++ * GPL-3.0 as a whole (the rest of winemac stays LGPL-2.1-or-later on its own).
++ *
++ * Port to 11.18: macdrv_CreateClientSurface() takes (hwnd, pixel_format, raw), and the opaque
++ * macdrv_window / macdrv_view / macdrv_metal_* typedefs are now WineWindow, WineContentView,
++ * id_MTLDevice, WineMetalView and CAMetalLayer. The table layout is unchanged; DXMT
++ * (3Shain/dxmt 7c8dee1 and v0.80, src/winemetal/unix/winemetal_unix.c) reads slots 1, 2, 6, 7
++ * and 8 and, from the win data, only client_cocoa_view.
++ */
++
++#if 0
++#pragma makedep unix
++#endif
++
++#include "config.h"
++
++#include <stdlib.h>
++
++#include "macdrv.h"
++
++/* DXMT's struct macdrv_win_data: hwnd, cocoa_window, cocoa_view, client_cocoa_view. */
++struct dxmt_win_data
++{
++    HWND             hwnd;
++    WineWindow      *cocoa_window;
++    WineContentView *cocoa_view;
++    WineContentView *client_cocoa_view;
++    struct macdrv_win_data *real;
++};
++
++static struct dxmt_win_data *dxmt_get_win_data(HWND hwnd)
++{
++    struct macdrv_win_data *real = get_win_data(hwnd);
++    struct dxmt_win_data *data;
++
++    if (!real) return NULL;
++    if (!real->client_view)
++    {
++        /* Wine 11 only gives a window a client view once something renders into it. Make
++         * one the way the Vulkan path does (format 0, not raw); like the 11.15 original, the
++         * surface is kept for the life of the window. */
++        release_win_data(real);
++        macdrv_CreateClientSurface(hwnd, 0, FALSE);
++        if (!(real = get_win_data(hwnd))) return NULL;
++    }
++    if (!(data = calloc(1, sizeof(*data))))
++    {
++        release_win_data(real);
++        return NULL;
++    }
++    data->hwnd = real->hwnd;
++    data->cocoa_window = real->cocoa_window;
++    data->cocoa_view = real->client_view;
++    data->client_cocoa_view = real->client_view;
++    data->real = real;
++    return data;
++}
++
++static void dxmt_release_win_data(struct dxmt_win_data *data)
++{
++    if (!data) return;
++    release_win_data(data->real);
++    free(data);
++}
++
++static void dxmt_init_display_devices(BOOL force)
++{
++}
++
++/* Same order as DXMT's struct macdrv_functions_t. DXMT declares a 10th slot, on_main_thread,
++ * which it never calls; it is NULL here so the table is as large as DXMT's view of it. */
++struct macdrv_functions_t
++{
++    void (*macdrv_init_display_devices)(BOOL);
++    struct dxmt_win_data *(*get_win_data)(HWND hwnd);
++    void (*release_win_data)(struct dxmt_win_data *data);
++    WineWindow *(*macdrv_get_cocoa_window)(HWND hwnd, BOOL require_on_screen);
++    id_MTLDevice (*macdrv_create_metal_device)(void);
++    void (*macdrv_release_metal_device)(id_MTLDevice d);
++    WineMetalView *(*macdrv_view_create_metal_view)(WineContentView *v, id_MTLDevice d);
++    CAMetalLayer *(*macdrv_view_get_metal_layer)(WineMetalView *v);
++    void (*macdrv_view_release_metal_view)(WineMetalView *v);
++    void (*on_main_thread)(void *block);
++};
++
++__attribute__((visibility("default"))) struct macdrv_functions_t macdrv_functions =
++{
++    dxmt_init_display_devices,
++    dxmt_get_win_data,
++    dxmt_release_win_data,
++    macdrv_get_cocoa_window,
++    macdrv_create_metal_device,
++    macdrv_release_metal_device,
++    macdrv_view_create_metal_view,
++    macdrv_view_get_metal_layer,
++    macdrv_view_release_metal_view,
++    NULL,
++};

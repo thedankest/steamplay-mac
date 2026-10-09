@@ -1,0 +1,55 @@
+loader, ntdll: find ntdll.so from a loader inside <unix dir>/wine.app, and exec that loader.
+
+Runner B (steamplay-mac). On arm64 macOS 26.5+ the Wine loader needs Apple's
+cross-architecture entitlement, and the kernel only honours it for the executable of a signed
+bundle that carries its provisioning profile. The loader therefore lives at
+lib/wine/aarch64-unix/wine.app/Contents/MacOS/wine (the layout CrossOver 27's FEX build and
+NotProton's run script use), not next to ntdll.so.
+
+- loader/main.c: try_dlopen() looked for ntdll.so only in the executable's own directory (or
+  ../dlls/ntdll in a build tree). Also accept <dir>/wine.app/Contents/MacOS and load
+  <dir>/ntdll.so.
+- dlls/ntdll/unix/loader.c: init_paths() set wineloader to <ntdll dir>/wine, the plain loader
+  that make install-lib puts there. New processes are exec'd through wineloader and it is
+  exported as WINELOADER, so an unsigned loader would be killed at exec. Prefer
+  <ntdll dir>/wine.app/Contents/MacOS/wine when it exists (aarch64 macOS only).
+
+Written against wine-11.18 (tag wine-11.18, commit 7b3fff76f, loader/main.c sha256
+ab7df8fb...) with Highball's 0018 (same file) applied first; offsets in loader.c assume
+highball/0003 is applied. Upstream status: none; drop when Brendan Shanks' arm64 macOS MRs land
+with an equivalent.
+
+--- a/loader/main.c
++++ b/loader/main.c
+@@ -182,6 +182,13 @@
+ 
+     if ((p = remove_tail( dir, "/loader" )))
+         path = build_path( p, "dlls/ntdll/ntdll.so" );
++#ifdef __APPLE__
++    /* a loader that carries an entitlement must be the executable of a bundle with its
++     * provisioning profile, <unix dir>/wine.app/Contents/MacOS/wine; ntdll.so stays in
++     * <unix dir>, next to the bundle */
++    else if ((p = remove_tail( dir, "/wine.app/Contents/MacOS" )))
++        path = build_path( p, "ntdll.so" );
++#endif
+     else
+         path = build_path( dir, "ntdll.so" );
+ 
+--- a/dlls/ntdll/unix/loader.c
++++ b/dlls/ntdll/unix/loader.c
+@@ -407,6 +407,15 @@
+         bin_dir = build_relative_path( dll_dir, LIBDIR "/wine", BINDIR );
+         data_dir = build_relative_path( dll_dir, LIBDIR "/wine", DATADIR "/wine" );
+         wineloader = build_path( ntdll_dir, "wine" );
++#if defined(__APPLE__) && defined(__aarch64__)
++        {
++            /* the entitled loader is a bundle next to ntdll.so (see loader/main.c); new
++             * processes and WINELOADER must use it, the plain loader is killed at exec */
++            char *app = build_path( ntdll_dir, "wine.app/Contents/MacOS/wine" );
++            if (!access( app, X_OK )) wineloader = app;
++            else free( app );
++        }
++#endif
+     }
+ 
+     set_dll_path();

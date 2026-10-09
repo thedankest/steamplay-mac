@@ -1,0 +1,68 @@
+fexunixlib_darwin: hardware TSO for every thread, not only the one that asked.
+
+FEX's Windows frontend (FEX-2608, Source/Windows/Common/TSOHandlerConfig.h:20) calls
+SetHardwareTSOControl once, from ProcessInit (ARM64EC) / BTCpuProcessInit (WoW64), and on
+success turns its software TSO off process-wide (FEXCore Context.h:459-463), so it treats the
+Linux prctl memory model as process-wide. On macOS thread_set_x86_64_compat
+switches only the calling thread, and threads made later by pthread_create start without it.
+Result before this patch: "TSOControl 1 kr=0" on the main thread, but every CreateThread
+thread ran x86 code with neither hardware nor software TSO (tsoprobe: 10^5 violations / 10M).
+
+Fix: once TSO has been granted, a pthread introspection hook calls thread_set_x86_64_compat(1)
+on PTHREAD_INTROSPECTION_THREAD_START, which macOS delivers on the new thread before its start
+routine. Knobs: FEXUNIX_TSO_INHERIT=0 (old behaviour), FEXUNIX_HWTSO=0 (refuse hardware TSO,
+FEX keeps software TSO). FEXUNIX_TRACE=1 also prints "TSOThread kr=N" per new thread.
+Applied by scripts/build-wine-arm64.sh after 0001; see research/RUNNER-B-TSO.md.
+
+--- a/fexunixlib_darwin.cpp
++++ b/fexunixlib_darwin.cpp
+@@ -26,12 +26,49 @@
+ constexpr NTSTATUS STATUS_INTERNAL_ERROR = 0xC00000E5;
+ 
+ static void trace(const char* what, long a, long b) { if (getenv("FEXUNIX_TRACE")) fprintf(stderr, "fexunixlib: %s %lx %lx\n", what, a, b); }
++
++/* steamplay-mac Runner B: hardware TSO for every thread, not just the first one.
++ * FEX's Windows frontend asks for hardware TSO exactly once, from ProcessInit/BTCpuProcessInit
++ * (TSOHandlerConfig), and on success turns its software TSO off for the whole process, so it
++ * treats the Linux prctl memory model as covering threads created later.
++ * thread_set_x86_64_compat only switches the calling thread, and threads made afterwards by
++ * pthread_create (Wine's NtCreateThreadEx) start without it, so all other x86 threads ran with
++ * neither hardware nor software TSO. Once TSO has been granted, a pthread introspection hook
++ * switches each new thread on at PTHREAD_INTROSPECTION_THREAD_START, which macOS delivers on
++ * the new thread itself before its start routine runs. FEXUNIX_TSO_INHERIT=0 turns this off. */
++#include <atomic>
++#include <mutex>
++#include <pthread/introspection.h>
++static std::atomic<bool> TSOAllThreads {false};
++static pthread_introspection_hook_t PrevThreadHook {};
++static void TSOThreadHook(unsigned int Event, pthread_t Thread, void* Addr, size_t Size) {
++  if (Event == PTHREAD_INTROSPECTION_THREAD_START && TSOAllThreads.load(std::memory_order_acquire)) {
++    kern_return_t kr = thread_set_x86_64_compat(1);
++    if (getenv("FEXUNIX_TRACE")) fprintf(stderr, "fexunixlib: TSOThread kr=%d\n", (int)kr);
++  }
++  if (PrevThreadHook) PrevThreadHook(Event, Thread, Addr, Size);
++}
++static void EnableTSOForNewThreads() {
++  static std::once_flag Once;
++  const char* Inherit = getenv("FEXUNIX_TSO_INHERIT");
++  if (Inherit && Inherit[0] == '0') return;
++  std::call_once(Once, [] { PrevThreadHook = pthread_introspection_hook_install(TSOThreadHook); });
++  TSOAllThreads.store(true, std::memory_order_release);
++}
++
+ static NTSTATUS TSOControl(void* _Args) {
+   trace("TSOControl", ((const FEXUnixLib_SetHardwareTSOControlArgs*)_Args)->Enable, 0);
+   auto Args = reinterpret_cast<const FEXUnixLib_SetHardwareTSOControlArgs*>(_Args);
++  /* FEXUNIX_HWTSO=0 refuses hardware TSO, so FEX keeps its software TSO (A/B and fallback testing). */
++  const char* HW = getenv("FEXUNIX_HWTSO");
++  if (Args->Enable && HW && HW[0] == '0') {
++    if (getenv("FEXUNIX_TRACE")) fprintf(stderr, "fexunixlib: TSOControl refused (FEXUNIX_HWTSO=0), FEX uses software TSO\n");
++    return STATUS_NOT_SUPPORTED;
++  }
+   kern_return_t kr = thread_set_x86_64_compat(Args->Enable ? 1 : 0);   /* per thread, needs the cross-architecture entitlement */
+   /* steamplay-mac Runner B gate: the result, not just the request ("TSOControl 1 kr=0") */
+   if (getenv("FEXUNIX_TRACE")) fprintf(stderr, "fexunixlib: TSOControl %d kr=%d\n", Args->Enable ? 1 : 0, (int)kr);
++  if (kr == KERN_SUCCESS && Args->Enable) EnableTSOForNewThreads();
+   return kr == KERN_SUCCESS ? STATUS_SUCCESS : STATUS_NOT_SUPPORTED;
+ }
+ static NTSTATUS UnalignedAtomicControl(void* a) { trace("UnalignedAtomic", ((const FEXUnixLib_SetKernelUnalignedAtomicControl*)a)->Flags, 0); return STATUS_NOT_SUPPORTED; }

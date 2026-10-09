@@ -1,0 +1,192 @@
+{
+  "_about": "Runner B (ARM64 Wine 11.18 + FEX, no Rosetta) build inputs, read by scripts/build-wine-arm64.sh and scripts/assemble-runner-b.sh with plutil. Rule 4: every input pinned by SHA-256. A sha256 of TODO-PIN makes the scripts refuse to run. Kinds: url = downloaded into downloads/ and verified; repo = a file committed here, verified before use. Keys must not contain dots (plutil key paths).",
+  "_highball": "gauthierpiarrette/highball-engine at ac5cc83bb7d90b8fcca8e60a4a37fce2b9ee1d81 (main, 2026-10-06). Local clone and GitHub blob shas compared 2026-10-09: identical.",
+
+  "wine": {
+    "kind": "url",
+    "url": "https://dl.winehq.org/wine/source/11.x/wine-11.18.tar.xz",
+    "file": "wine-11.18.tar.xz",
+    "size": 46763696,
+    "sha256": "c6282f6d4daecf11f3ab9f9a2b6c598f67be7e28c363ba2cae8a3c44b611e7a4",
+    "subdir": "wine-11.18",
+    "source": "Highball inputs-arm64.json (ac5cc83). Single source: WineHQ publishes no checksum list. After the first fetch, diff once against tag wine-11.18 (tag object ccf4f04c, commit 7b3fff76f101, 2026-09-18)."
+  },
+  "llvm-mingw": {
+    "kind": "url",
+    "url": "https://github.com/mstorsjo/llvm-mingw/releases/download/20260922/llvm-mingw-20260922-ucrt-macos-universal.tar.xz",
+    "file": "llvm-mingw-20260922-ucrt-macos-universal.tar.xz",
+    "size": 124289672,
+    "sha256": "52e5f5a7b131021d0c39a37a38fa380a1da7885cd04bd61afd0cd4ecfb8bc1f3",
+    "source": "Highball inputs-arm64.json; equals the GitHub release asset digest (gh api, 2026-10-09)."
+  },
+  "hangover-dlls": {
+    "kind": "url",
+    "url": "https://github.com/AndreRH/hangover/releases/download/hangover-11.16/hangover_11.16_dlls.tar",
+    "file": "hangover_11.16_dlls.tar",
+    "size": 30126080,
+    "sha256": "645bcdf861db157b9057854c98797cedb477a00723429a1b996450dfb28fc6d2",
+    "source": "Highball inputs-arm64.json; equals the GitHub release asset digest (gh api, 2026-10-09). FEX 2608 as libarm64ecfex.dll / libwow64fex.dll, MIT."
+  },
+
+  "highball-0003": {
+    "kind": "repo",
+    "path": "patches/highball/0003-ntdll-winedllpath-prepend.patch",
+    "sha256": "8a56c17512731bd853ddc9e638761a5f9623b65e7c44bbefd89e757c3b868dc9",
+    "source": "Highball patches-arm64/0003 at ac5cc83 (byte-identical to patches/0003, which Runner A already carries). LGPL-2.1-or-later."
+  },
+  "highball-0018": {
+    "kind": "repo",
+    "path": "patches/highball-arm64/0018-loader-arm64-macos-pagezero-reserve.patch",
+    "sha256": "f706d8ba923a4972f423104bc2ea2b10353f4ca5ec968a950bde9f5d26ada9a9",
+    "source": "Highball patches-arm64/0018 at ac5cc83. LGPL-2.1-or-later."
+  },
+  "highball-0019": {
+    "kind": "repo",
+    "path": "patches/highball-arm64/0019-ntdll-arm64-macos-image-pages.patch",
+    "sha256": "84d4b85d17dc0f7bf1ba30ba67fc5b3c9f8fb0fb3910dabb1b8f1bcea8800897",
+    "source": "Highball patches-arm64/0019 at ac5cc83. LGPL-2.1-or-later."
+  },
+  "runner-b-0020": {
+    "kind": "repo",
+    "path": "patches/runner-b/0020-loader-find-ntdll-from-wine-app.patch",
+    "sha256": "5a80c28fd06e074b8ee96a510dffb4868b4d1daf3b135a72f7c1dd584fc94833",
+    "source": "Ours, written against wine-11.18 loader/main.c and dlls/ntdll/unix/loader.c (read from tag wine-11.18 via the wine-mirror GitHub API). LGPL-2.1-or-later like the files it changes."
+  },
+  "runner-b-0021": {
+    "kind": "repo",
+    "path": "patches/runner-b/0021-winemac-export-macdrv-functions-for-dxmt.patch",
+    "sha256": "53110097cfc00acd12d7b94171368ea616b650ec3aa2d85af498b88c02748bca",
+    "source": "Ours (B2): port of leonseemann/NotProton winemac-patch/dxmt_export.c (d56e28e0, file sha256 66056ac5..., GPL-3, Wine 11.15) to the wine-11.18 winemac API; exports macdrv_functions for DXMT winemetal.so (slots 1, 2, 6, 7, 8 + client_cocoa_view). GPL-3 for dxmt_export.c, so winemac.so is GPL-3 as a whole."
+  },
+  "fexunixlib-darwin": {
+    "kind": "repo",
+    "path": "runner-b/fex/fexunixlib_darwin.cpp",
+    "sha256": "515b2c0af0d03a8462f4bbe48dd3169eb9f46e033e1203190eb774f5eccf1585",
+    "source": "Highball fex/fexunixlib_darwin.cpp at ac5cc83, kept unchanged; our kr trace is runner-b/fex/0001-fexunixlib-trace-kr.patch. MIT (after FEX Source/Windows/UnixLib); FEX's licence text is runner-b/fex/LICENSE.FEX."
+  },
+  "fexunixlib-trace": {
+    "kind": "repo",
+    "path": "runner-b/fex/0001-fexunixlib-trace-kr.patch",
+    "sha256": "f60aeb752599a33863a12e44a3d984042985803196706ca3b986a944b9567bae",
+    "source": "Ours: prints the kern_return_t of thread_set_x86_64_compat (\"TSOControl 1 kr=0\") behind FEXUNIX_TRACE. Test-compiled for arm64 against the macOS 27 CLT SDK."
+  },
+  "fexunixlib-tso-threads": {
+    "kind": "repo",
+    "path": "runner-b/fex/0002-fexunixlib-tso-all-threads.patch",
+    "sha256": "c4107a399aa4b1d5adff260e871cb8f72fff9d27632abae39a7741b1c60c5854",
+    "source": "Ours: thread_set_x86_64_compat is per thread on macOS and FEX asks once, so a pthread introspection hook enables hardware TSO on every thread started after FEX's request. Applied after 0001. Verified with tsoprobe x64 + i386: 0 violations (research/RUNNER-B-TSO.md)."
+  },
+
+  "moltenvk": {
+    "kind": "url",
+    "url": "https://github.com/KhronosGroup/MoltenVK/releases/download/v1.4.2/MoltenVK-macos.tar",
+    "file": "MoltenVK-1.4.2-macos.tar",
+    "size": 59563008,
+    "sha256": "f95765a6229cb7b915990a2890ce12ebe36a730b021545d3d52ae69ce4c4024e",
+    "source": "Runner A's pin (scripts/build-deps.sh); equals the GitHub release digest. The dylib is universal (x86_64 arm64, checked with lipo on the local copy)."
+  },
+  "crossover-sources": {
+    "kind": "url",
+    "url": "https://media.codeweavers.com/pub/crossover/source/crossover-sources-26.3.0.tar.gz",
+    "file": "crossover-sources-26.3.0.tar.gz",
+    "size": 149054023,
+    "sha256": "ac99c8ca4b3848f3e81784135f023df266b61c2345726ea55a50b3e030dd6872",
+    "source": "Runner A's pin (scripts/prepare-wine-src.sh). Runner B uses only sources/gmp (inside gnutls), gnutls and freetype from it, for build-deps.sh."
+  },
+  "nettle": {
+    "kind": "url",
+    "url": "https://ftpmirror.gnu.org/gnu/nettle/nettle-3.10.2.tar.gz",
+    "file": "nettle-3.10.2.tar.gz",
+    "sha256": "fe9ff51cb1f2abb5e65a6b8c10a92da0ab5ab6eaf26e7fc2b675c45f1fb519b5",
+    "source": "Runner A's pin (scripts/build-deps.sh)."
+  },
+  "sdl2": {
+    "kind": "url",
+    "url": "https://github.com/libsdl-org/SDL/releases/download/release-2.32.10/SDL2-2.32.10.tar.gz",
+    "file": "SDL2-2.32.10.tar.gz",
+    "sha256": "5f5993c530f084535c65a6879e9b26ad441169b3e25d789d83287040a9ca5165",
+    "source": "Runner A's pin (scripts/build-deps.sh)."
+  },
+  "ffmpeg": {
+    "kind": "url",
+    "url": "https://ffmpeg.org/releases/ffmpeg-7.1.5.tar.xz",
+    "file": "ffmpeg-7.1.5.tar.xz",
+    "sha256": "de668509caf9e35e3cd162473441fdb29538c6d96ed080292b3cf9e6fc5d558f",
+    "source": "Runner A's pin (scripts/build-deps.sh)."
+  },
+
+  "_dxmt": "B2 renderer, read by scripts/build-dxmt-arm64.sh. 3Shain/dxmt pinned at 7c8dee1 (PR #209 Ci/arm64x tip, merged 2026-09-17; tree c273b79a). GitHub tarballs carry no published digest, so the sha256s below were taken by `scripts/build-dxmt-arm64.sh pin` (2026-10-10) after every file matched the commit's git tree (gh api), as rule 4 asks. Submodule external/nvapi (NVIDIA/nvapi d08488f) is only needed with -Denable_nvapi and is not pinned.",
+  "dxmt": {
+    "kind": "url",
+    "url": "https://codeload.github.com/3Shain/dxmt/tar.gz/7c8dee1c2d73415301ceb7d1fa810861cef4cd67",
+    "file": "dxmt-7c8dee1c2d73415301ceb7d1fa810861cef4cd67.tar.gz",
+    "size": 764995,
+    "sha256": "2a65d8c14d8b49e2f935658435862c3167cd8e68d9e37a996baf34110a232ada",
+    "commit": "7c8dee1c2d73415301ceb7d1fa810861cef4cd67",
+    "tree": "c273b79a2bfa47e62e8526786559f4d18911625a",
+    "subdir": "dxmt-7c8dee1c2d73415301ceb7d1fa810861cef4cd67",
+    "source": "github.com/3Shain/dxmt, LGPL-2.1-or-later (LICENSE at 7c8dee1; LICENSE.OLD keeps the older notice). 379 blobs, 3,941,928 bytes uncompressed (gh api git tree, 2026-10-10); pinned 2026-10-10 by `build-dxmt-arm64.sh pin`: all 379 files matched the git tree of 7c8dee1 (gh api)."
+  },
+  "dxmt-directx-headers": {
+    "kind": "url",
+    "url": "https://codeload.github.com/misyltoad/mingw-directx-headers/tar.gz/9df86f2341616ef1888ae59919feaa6d4fad693d",
+    "file": "mingw-directx-headers-9df86f2341616ef1888ae59919feaa6d4fad693d.tar.gz",
+    "size": 473287,
+    "sha256": "9c1b8bbfd2d6c758fac4d93c2808a46bc1eee429fe656b4f21b29e02615aa8aa",
+    "commit": "9df86f2341616ef1888ae59919feaa6d4fad693d",
+    "subdir": "mingw-directx-headers-9df86f2341616ef1888ae59919feaa6d4fad693d",
+    "source": "DXMT submodule include/native/directx at 7c8dee1 (gitlink 9df86f2, 2022-08-22). 66 blobs, 4,140,678 bytes uncompressed (gh api); pinned 2026-10-10 by `build-dxmt-arm64.sh pin`: all 66 files matched the git tree of 9df86f2 (gh api). Required: DXMT's meson.build stops without include/native/directx/d3d11.h."
+  },
+  "llvm-project-15": {
+    "kind": "url",
+    "url": "https://github.com/llvm/llvm-project/releases/download/llvmorg-15.0.7/llvm-project-15.0.7.src.tar.xz",
+    "file": "llvm-project-15.0.7.src.tar.xz",
+    "size": 110936452,
+    "sha256": "8b5fcb24b4128cf04df1b0b9410ce8b1a729cb3c544e6da885d234280dedeac6",
+    "source": "LLVM 15.0.7 (DXMT docs/DEVELOPMENT.md: exact major 15; DXMT CI LLVM_VERSION llvmorg-15.0.7). The release asset predates GitHub digests (gh api: none); sha256 from two independent packagers that agree: Homebrew llvm@15 formula (brew info --json=v2) and MacPorts lang/llvm-15 Portfile (also size 110936452 = the GitHub asset size). Upstream .sig exists (GPG). Apache-2.0 WITH LLVM-exception. Only llvm/, cmake/ and third-party/ are extracted."
+  },
+  "dxmt-ci-prebuilt": {
+    "kind": "gh-artifact",
+    "repo": "3Shain/dxmt",
+    "run": "35187190160",
+    "artifact": "10482910642",
+    "name": "dxmt-7c8dee1c2d73415301ceb7d1fa810861cef4cd67",
+    "size": 34749613,
+    "sha256": "844d9bc4771466f0e2f08e5b367169e3cc482cd2b232a2411f508a28df16e68f",
+    "expires": "2026-12-16T05:48:29Z",
+    "source": "Optional shortcut, not the build route: DXMT's own CI package job for push run 35187190160 at 7c8dee1 (zip holding dxmt-<sha>.tar.gz: gcc x86_64 + gcc x86 + clang arm64ec builds; arm64ec half linked against 3Shain's wine-11.2 tree, not ours). sha256 is GitHub's artifact digest (gh api .../artifacts, 2026-10-10). Expires with the run; never use in CI."
+  },
+
+  "wine-mono-x86": {
+    "kind": "url",
+    "url": "https://dl.winehq.org/wine/wine-mono/11.3.0/wine-mono-11.3.0-x86.msi",
+    "file": "wine-mono-11.3.0-x86.msi",
+    "size": 83348992,
+    "sha256": "df2dfc1665c2511882e7cabd56eafd0c0a3d94e5a7e86f969277f6c189d418d3",
+    "source": "wine-11.18 dlls/appwiz.cpl/addons.c MONO_VERSION 11.3.0 / MONO_SHA (x86); equals the madewokherd/wine-mono release digest."
+  },
+  "wine-mono-arm64": {
+    "kind": "url",
+    "url": "https://dl.winehq.org/wine/wine-mono/11.3.0/wine-mono-11.3.0-arm64.msi",
+    "file": "wine-mono-11.3.0-arm64.msi",
+    "size": 89109504,
+    "sha256": "b0c47d374efaf22cbff76cb10488ac2d1627b067e085aef7acec573884120e0f",
+    "source": "wine-11.18 dlls/appwiz.cpl/addons.c MONO_SHA (__aarch64__); equals the madewokherd/wine-mono release digest."
+  },
+  "wine-gecko-x86": {
+    "kind": "url",
+    "url": "https://dl.winehq.org/wine/wine-gecko/2.47.4/wine-gecko-2.47.4-x86.msi",
+    "file": "wine-gecko-2.47.4-x86.msi",
+    "size": 55187968,
+    "sha256": "26cecc47706b091908f7f814bddb074c61beb8063318e9efc5a7f789857793d6",
+    "source": "Runner A's pin; equals wine-11.18 addons.c GECKO_SHA (i386)."
+  },
+  "wine-gecko-x86_64": {
+    "kind": "url",
+    "url": "https://dl.winehq.org/wine/wine-gecko/2.47.4/wine-gecko-2.47.4-x86_64.msi",
+    "file": "wine-gecko-2.47.4-x86_64.msi",
+    "size": 53898752,
+    "sha256": "e590b7d988a32d6aa4cf1d8aa3aa3d33766fdd4cf4c89c2dcc2095ecb28d066f",
+    "source": "Runner A's pin; equals wine-11.18 addons.c GECKO_SHA (x86_64)."
+  }
+}

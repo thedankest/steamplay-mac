@@ -1,0 +1,198 @@
+# Runner B: upstream Wine 11.18 built natively for Apple Silicon (arm64 Unix side, ARM64X
+# builtins, i386 for WoW64) with FEX (Hangover 11.16 DLLs + the Darwin unix helper), no Rosetta.
+# Same scripts as a local build: scripts/build-wine-arm64.sh, scripts/assemble-runner-b.sh.
+# The tarball is UNSIGNED: the loader only starts after scripts/runner-b-sign.sh has signed it on
+# the user's Mac with their own provisioning profile. It carries NO Apple D3DMetal/GPTK, NO Valve
+# DLLs and NO provisioning profile.
+name: runner-b
+on:
+  push:
+    branches: [runner-b]
+    paths:
+      - ".github/workflows/runner-b.yml"
+      - "ci/runner-b-inputs.json"
+      - "scripts/build-wine-arm64.sh"
+      - "scripts/build-deps.sh"
+      - "scripts/assemble-runner-b.sh"
+      - "patches/runner-b/**"
+      - "patches/highball-arm64/**"
+      - "patches/highball/0003-ntdll-winedllpath-prepend.patch"
+      - "runner-b/**"
+  workflow_dispatch:
+    inputs:
+      runner_id:
+        description: "runner id (becomes <id>-<short sha> in the tarball name)"
+        default: selfbuilt-wine11.18-arm64-r1
+        type: string
+      release:
+        description: "also publish a GitHub Release with the tarball"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runner-b-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    # macos-26 is the arm64 image (actions/runner-images README, checked 2026-10-09): Xcode 26.6
+    # default, macOS SDK 26.5, so -x86_64_layout_emulation (Xcode 26.4+) and the 26.5 APIs are
+    # there; the `check` stage fails early if not. Fallback: the `xcode-27` preview label
+    # (macOS 27). macos-26-xlarge (paid) is a drop-in for speed.
+    runs-on: macos-26
+    timeout-minutes: 360
+    env:
+      RUNNER_ID: ${{ inputs.runner_id || 'selfbuilt-wine11.18-arm64-r1' }}
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          submodules: recursive   # notproton: only its valve-packages.manifest, for the hash check
+
+      - name: version
+        id: ver
+        run: |
+          set -euo pipefail
+          v="${RUNNER_ID}-$(git rev-parse --short=8 HEAD)"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "VERSION=$v" >> "$GITHUB_ENV"
+          echo "checkout path: $PWD"
+          case "$PWD" in *" "*) echo "path has spaces" >&2; exit 1;; esac
+          case "$RUNNER_ID" in *[!A-Za-z0-9._-]*) echo "bad runner id" >&2; exit 1;; esac
+
+      - name: host (arm64, no Rosetta needed)
+        run: |
+          set -euo pipefail
+          [ "$(uname -m)" = arm64 ]
+          sw_vers; xcodebuild -version; xcrun --show-sdk-version
+
+      - name: toolchain (Homebrew, arm64)
+        run: |
+          set -euo pipefail
+          brew install bison flex ccache cmake ninja pkgconf autoconf zstd
+          for f in bison flex ccache cmake ninja pkgconf autoconf zstd; do brew list --versions "$f"; done
+
+      - name: plan (pins, series, configure line)
+        run: scripts/build-wine-arm64.sh --print-plan
+
+      - name: ccache
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: build/ccache-arm64   # build-wine-arm64.sh sets CCACHE_DIR=$ROOT/build/ccache-arm64
+          key: ccache-b-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('ci/runner-b-inputs.json', 'patches/runner-b/**', 'patches/highball-arm64/**', 'scripts/build-wine-arm64.sh') }}
+          restore-keys: |
+            ccache-b-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: check (SDK declares thread_set_x86_64_compat, ld has -x86_64_layout_emulation)
+        run: scripts/build-wine-arm64.sh check
+
+      - name: fetch (wine-11.18, llvm-mingw, Hangover DLLs, CrossOver deps sources; all pinned)
+        run: scripts/build-wine-arm64.sh fetch
+
+      - name: arm64 host libraries (build/deps-arm64)
+        run: scripts/build-wine-arm64.sh deps
+
+      - name: patch series
+        run: scripts/build-wine-arm64.sh patch
+
+      - name: configure
+        run: scripts/build-wine-arm64.sh configure
+
+      - name: Wine
+        run: |
+          export CCACHE_DIR="$PWD/build/ccache-arm64"
+          ccache --max-size=2G || true
+          ccache -z || true
+          scripts/build-wine-arm64.sh make
+          ccache -s || true
+
+      - name: FEX and loader bundle
+        run: scripts/build-wine-arm64.sh fex loader
+
+      - name: assemble (Mono, Gecko; no D3DMetal, no renderer overlay yet)
+        run: scripts/assemble-runner-b.sh "$RUNNER_ID"
+
+      - name: forbidden-content check
+        run: |
+          set -euo pipefail
+          R="dist/runners/$RUNNER_ID"
+          test -x "$R/lib/wine/aarch64-unix/wine.app/Contents/MacOS/wine"
+          test -x "$R/bin/wineserver-arm64"
+          test -f "$R/lib/wine/aarch64-windows/xtajit64.dll"; test -f "$R/lib/wine/aarch64-windows/xtajit.dll"
+          test -f "$R/lib/libMoltenVK.dylib"
+          ls "$R/share/wine/mono"/*.msi "$R/share/wine/gecko"/*.msi
+          bad=0
+          # Apple D3DMetal / GPTK (Runner B has no DXMT yet either, so no nvngx at all)
+          if find "$R" \( -iname 'D3DMetal*' -o -iname 'libd3dshared*' -o -iname 'nvngx*' \
+                -o -iname '*game-porting-toolkit*' -o -iname '*gptk*' \) | grep .; then bad=1; fi
+          [ ! -e "$R/lib/external" ] && [ ! -e "$R/lib/renderers/d3dmetal" ] || { echo "d3dmetal dirs present"; bad=1; }
+          grep -Eq '"d3dmetal"[[:space:]]*:[[:space:]]*false' "$R/runner.json" || { echo "runner.json must say d3dmetal: false"; bad=1; }
+          # No provisioning profile or signing material: signing happens on the user's Mac.
+          if find "$R" \( -iname '*.provisionprofile' -o -iname '*.mobileprovision' -o -iname '*.entitlements' \) | grep .; then bad=1; fi
+          # Valve DLLs (names from notproton valve-packages.manifest / fetch-valve-bridge.sh)
+          if find "$R" \( -iname 'steamclient.dll' -o -iname 'steamclient64.dll' -o -iname 'tier0_s64.dll' \
+                -o -iname 'vstdlib_s64.dll' -o -iname 'Steam.dll' -o -iname 'SteamService.exe' \
+                -o -iname 'iscriptevaluator.exe' -o -iname 'GameOverlayRenderer64.dll' \
+                -o -iname 'legacycompat' \) | grep .; then bad=1; fi
+          M=notproton/app/Sources/NotProtonApp/Resources/valve-packages.manifest
+          awk '$1=="file"{print $5}' "$M" | sort -u > "$RUNNER_TEMP/valve.sha"
+          find "$R" -type f -exec shasum -a 256 {} + | awk '{print $1}' | sort -u > "$RUNNER_TEMP/runner.sha"
+          if comm -12 "$RUNNER_TEMP/valve.sha" "$RUNNER_TEMP/runner.sha" | grep .; then echo "Valve file hash found"; bad=1; fi
+          # Nothing linked from Homebrew or the build machine.
+          if find "$R" -type f \( -name '*.so' -o -name '*.dylib' -o -path '*/bin/*' -o -path '*/MacOS/*' \) \
+                -exec otool -L {} + | grep -E '/opt/homebrew|/usr/local|/Users/runner'; then bad=1; fi
+          [ "$bad" = 0 ] || { echo "forbidden content in tarball tree" >&2; exit 1; }
+          echo "clean"
+
+      - name: tarball (zstd -19)
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          T="out/runner-b-${VERSION}.tar.zst"
+          tar -C dist/runners -cf - "$RUNNER_ID" | zstd -19 -T0 -o "$T"
+          (cd out && shasum -a 256 "runner-b-${VERSION}.tar.zst" > "runner-b-${VERSION}.tar.zst.sha256")
+          ls -l out; cat out/*.sha256
+          ! zstd -dc "$T" | tar -tf - | grep -Ei 'd3dmetal|libd3dshared|tier0_s64|vstdlib_s64|steamclient(64)?\.dll|GameOverlayRenderer64|SteamService|provisionprofile'
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: runner-b-${{ steps.ver.outputs.version }}
+          path: |
+            out/runner-b-*.tar.zst
+            out/runner-b-*.tar.zst.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: config.log on failure
+        if: failure()
+        run: tail -n 60 build/wine-arm64/obj/config.log 2>/dev/null || true
+
+  release:
+    if: ${{ inputs.release }}
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: runner-b-${{ needs.build.outputs.version }}
+          path: out
+      - name: verify and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          cd out
+          sha256sum -c "runner-b-${VERSION}.tar.zst.sha256"
+          gh release create "runner-b-${VERSION}" "runner-b-${VERSION}.tar.zst" "runner-b-${VERSION}.tar.zst.sha256" \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease --title "Runner B ${VERSION}" \
+            --notes "Upstream Wine 11.18 arm64 + FEX (Hangover 11.16), unsigned: run scripts/runner-b-sign.sh on your Mac. No D3DMetal, no Valve DLLs. Run ${GITHUB_RUN_ID}."

@@ -1,0 +1,18 @@
+# Runner B: applied in this order on top of upstream wine-11.18 (ci/runner-b-inputs.json) by
+# scripts/build-wine-arm64.sh, with `patch -p1`, skipping a patch that is already applied.
+# Paths are relative to patches/. Each file is also pinned by sha256 in ci/runner-b-inputs.json.
+# Runner A's patches/series is a different tree (CrossOver 26.3) and is not used here.
+#
+# Highball engine, arm64 line (LGPL-2.1-or-later, https://github.com/gauthierpiarrette/highball-engine
+# at ac5cc83, patches-arm64/). 0003 is byte-identical to the copy Runner A carries.
+highball/0003-ntdll-winedllpath-prepend.patch
+highball-arm64/0018-loader-arm64-macos-pagezero-reserve.patch
+highball-arm64/0019-ntdll-arm64-macos-image-pages.patch
+#
+# Ours: the loader lives in <unix dir>/wine.app/Contents/MacOS so it can carry its provisioning
+# profile; find ntdll.so from there and exec that loader for new processes.
+runner-b/0020-loader-find-ntdll-from-wine-app.patch
+#
+# Ours (B2): export winemac's macdrv_functions table for DXMT's winemetal.so. Port of
+# leonseemann/NotProton winemac-patch/dxmt_export.c (GPL-3) to the 11.18 winemac API.
+runner-b/0021-winemac-export-macdrv-functions-for-dxmt.patch

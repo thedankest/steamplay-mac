@@ -1,0 +1,16 @@
+fexunixlib_darwin: trace the kern_return_t of thread_set_x86_64_compat behind FEXUNIX_TRACE.
+
+Runner B B1 gate: WINEDEBUG=+loaddll FEXUNIX_TRACE=1 must show "TSOControl 1 kr=0".
+Applied by scripts/build-wine-arm64.sh to a work copy; the pinned original stays unchanged.
+
+--- a/fexunixlib_darwin.cpp
++++ b/fexunixlib_darwin.cpp
+@@ -30,6 +30,8 @@
+   trace("TSOControl", ((const FEXUnixLib_SetHardwareTSOControlArgs*)_Args)->Enable, 0);
+   auto Args = reinterpret_cast<const FEXUnixLib_SetHardwareTSOControlArgs*>(_Args);
+   kern_return_t kr = thread_set_x86_64_compat(Args->Enable ? 1 : 0);   /* per thread, needs the cross-architecture entitlement */
++  /* steamplay-mac Runner B gate: the result, not just the request ("TSOControl 1 kr=0") */
++  if (getenv("FEXUNIX_TRACE")) fprintf(stderr, "fexunixlib: TSOControl %d kr=%d\n", Args->Enable ? 1 : 0, (int)kr);
+   return kr == KERN_SUCCESS ? STATUS_SUCCESS : STATUS_NOT_SUPPORTED;
+ }
+ static NTSTATUS UnalignedAtomicControl(void* a) { trace("UnalignedAtomic", ((const FEXUnixLib_SetKernelUnalignedAtomicControl*)a)->Flags, 0); return STATUS_NOT_SUPPORTED; }
