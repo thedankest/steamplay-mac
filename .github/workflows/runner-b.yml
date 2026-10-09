@@ -7,6 +7,8 @@
 name: runner-b
 on:
   push:
+    # A push that creates this branch can be skipped by the paths filter; any later push that
+    # touches one of these paths builds.
     branches: [runner-b]
     paths:
       - ".github/workflows/runner-b.yml"
