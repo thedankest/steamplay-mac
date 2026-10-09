@@ -387,6 +387,12 @@ if want release; then
     check "licence confirm event with the licence hash" eq "$ltok" "$(shasum -a 256 "$T/fake-License.rtf" | cut -c1-64)"
     inst NP_TEST_RUNNER_LOCK="$W/lock" NP_D3DMETAL_LICENSE_TOKEN="$ltok" NP_TEST_ANSWER_PLAN=yes -- all --from release
     check "with the licence token D3DMetal installs" eq "$(st '.runners["selfbuilt-test-r1-abcdef12"].d3dmetal.status')" installed
+    # A later run without the token must keep the D3DMetal accepted above, not drop it.
+    d3dsum="$(cat "$NP_SUPPORT/runners/selfbuilt-test-r1-abcdef12/lib/external/D3DMetal.files.sha256")"
+    inst NP_TEST_RUNNER_LOCK="$W/lock" NP_TEST_ANSWER_PLAN=yes -- all --from release
+    check "without the token the accepted D3DMetal is kept" eq "$(st '.runners["selfbuilt-test-r1-abcdef12"].d3dmetal.status')" kept
+    check "and its files are unchanged" eq "$(cat "$NP_SUPPORT/runners/selfbuilt-test-r1-abcdef12/lib/external/D3DMetal.files.sha256" 2>/dev/null)" "$d3dsum"
+    check "and doctor accepts them" bash -c 'cd "$1" && shasum -a 256 -c --quiet lib/external/D3DMetal.files.sha256' _ "$NP_SUPPORT/runners/selfbuilt-test-r1-abcdef12"
 
     # Archive validation, unit level.
     mk() { # name tar-args... -> $rel/<name>.tar.zst
