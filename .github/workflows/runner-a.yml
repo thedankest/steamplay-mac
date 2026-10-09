@@ -116,7 +116,9 @@ jobs:
           ls "$R/share/wine/mono" | grep -q . ; ls "$R/share/wine/gecko"/*.msi
           bad=0
           # Apple D3DMetal / GPTK
-          if find "$R" \( -iname 'D3DMetal*' -o -iname 'libd3dshared*' -o -iname 'nvngx*' \
+          # DXMT v0.80 ships its own nvngx.dll in renderers/dxmt; any other copy is Apple's
+          if find "$R" \( -iname 'D3DMetal*' -o -iname 'libd3dshared*' \
+                -o \( -iname 'nvngx*' ! -path "$R/lib/renderers/dxmt/*" \) \
                 -o -iname '*game-porting-toolkit*' -o -iname '*gptk*' \) | grep .; then bad=1; fi
           [ ! -e "$R/lib/external" ] && [ ! -e "$R/lib/renderers/d3dmetal" ] || { echo "d3dmetal dirs present"; bad=1; }
           # Valve DLLs (names from notproton valve-packages.manifest / fetch-valve-bridge.sh)
