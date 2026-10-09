@@ -3,6 +3,15 @@
 # The tarball carries NO Apple D3DMetal/GPTK and NO Valve DLLs; see ci/NOTES.md.
 name: runner-a
 on:
+  # Builds on every push to the work branch that touches a build input (workflow_dispatch only
+  # works once this file is on the default branch).
+  push:
+    branches: [runner-a-phase1]
+    paths:
+      - ".github/workflows/runner-a.yml"
+      - "scripts/**"
+      - "patches/**"
+      - "notproton"
   workflow_dispatch:
     inputs:
       runner_id:
