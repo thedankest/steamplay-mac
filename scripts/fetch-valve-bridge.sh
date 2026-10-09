@@ -3,21 +3,28 @@
 # tier0_s64.dll, vstdlib_s64.dll, legacycompat/*) from Valve's CDN into build/bridge,
 # following notproton/app/.../valve-packages.manifest: every package zip and every file
 # taken out of it is checked against the manifest's sha256. Nothing of Valve's is committed.
+#
+# Env: CACHE (download cache, default downloads/valve), OUT (bridge tree, default build/bridge).
+# install.sh points OUT at a staging dir and swaps it in only when every hash matched.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MANIFEST="$ROOT/notproton/app/Sources/NotProtonApp/Resources/valve-packages.manifest"
-CACHE="$ROOT/downloads/valve"
-OUT="$ROOT/build/bridge"
+CACHE="${CACHE:-$ROOT/downloads/valve}"
+OUT="${OUT:-$ROOT/build/bridge}"
 mkdir -p "$CACHE" "$OUT"
 
 bases=$(awk '$1=="base"{print $2}' "$MANIFEST")
 
 fetch_package() { # file sha
     local dst="$CACHE/$1"
-    if [ -f "$dst" ] && echo "$2  $dst" | shasum -a 256 -c - >/dev/null 2>&1; then return 0; fi
+    if [ -f "$dst" ]; then
+        echo "$2  $dst" | shasum -a 256 -c - >/dev/null 2>&1 && return 0
+        echo "cached $dst has the wrong hash; deleting it" >&2
+        rm -f "$dst"
+    fi
     for b in $bases; do
-        if curl -fsSL --connect-timeout 10 -o "$dst.part" "$b/$1" \
+        if curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 10 -o "$dst.part" "$b/$1" \
             && echo "$2  $dst.part" | shasum -a 256 -c - >/dev/null 2>&1; then
             mv "$dst.part" "$dst"; return 0
         fi

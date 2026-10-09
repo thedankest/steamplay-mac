@@ -1,0 +1,106 @@
+diff --git a/dylib/feats/compat_run.sh b/dylib/feats/compat_run.sh
+--- a/dylib/feats/compat_run.sh
++++ b/dylib/feats/compat_run.sh
+@@ -45,6 +45,10 @@
+   esac
+   argi=$((argi+1))
+ done
++# Where WINEMSYNC came from, before global.env can supply it: a per-game value (launch options,
++# or Steam's Compatibility-panel MSync toggle, which arrives in the environment) is a choice.
++np_msync_src=""
++[ -n "${WINEMSYNC:-}" ] && np_msync_src=game
+ 
+ # Global defaults for every game: KEY=VALUE lines in global.env, same name rules as the
+ # launch options; a game's own launch options win.
+@@ -330,16 +334,35 @@
+ if [ -n "$STEAM_COMPAT_DATA_PATH" ]; then
+   export WINEPREFIX="$STEAM_COMPAT_DATA_PATH/pfx"
+   mkdir -p "$WINEPREFIX"
+-  msync_from=launch-options
+-  if [ -z "$WINEMSYNC" ] && [ -r "$STEAM_COMPAT_DATA_PATH/notproton-msync" ]; then
+-    WINEMSYNC=$(tr -d ' \t\n' \
+-      < "$STEAM_COMPAT_DATA_PATH/notproton-msync" 2>/dev/null || true)
++  # msync, first match wins on every launch:
++  #   1. a per-game value (launch options or the Compatibility-panel toggle), saved for this
++  #      prefix as "explicit=<0|1>";
++  #   2. that saved explicit value;
++  #   3. global.env (a global default: it follows global.env and is never saved per prefix);
++  #   4. the default for the runner kind.
++  # A plain "0"/"1" file is a saved default from older run scripts (often from a launch that
++  # misread the runner), so it is ignored and removed.
++  msync_file="$STEAM_COMPAT_DATA_PATH/notproton-msync"
++  msync_saved=""
++  if [ -r "$msync_file" ]; then
++    msync_saved=$(sed -n 's/^explicit=\([01]\)$/\1/p' "$msync_file" 2>/dev/null | head -n 1)
++    if [ -z "$msync_saved" ]; then
++      echo "sync: ignoring legacy $msync_file ($(tr -d ' \t\n' < "$msync_file" 2>/dev/null)): a saved default, not a choice" >> "$log" 2>&1 || true
++      rm -f "$msync_file" 2>/dev/null || true
++    fi
++  fi
++  if [ "$np_msync_src" = game ]; then
++    msync_from=launch-options
++    printf 'explicit=%s\n' "$WINEMSYNC" > "$msync_file" 2>/dev/null || true
++  elif [ -n "$msync_saved" ]; then
++    WINEMSYNC=$msync_saved
+     msync_from=carried-over
++  elif [ -n "$WINEMSYNC" ]; then
++    msync_from=global.env
++  else
++    msync_from="default for $runner_kind"
+   fi
+-  [ -n "$WINEMSYNC" ] || msync_from=default
+   export WINEMSYNC="${WINEMSYNC:-$msync_default}"
+-  printf '%s' "$WINEMSYNC" \
+-    > "$STEAM_COMPAT_DATA_PATH/notproton-msync" 2>/dev/null || true
+   stage_step="prefix arch check"
+   refuse_foreign_prefix
+   echo "sync: WINEMSYNC=$WINEMSYNC from $msync_from" >> "$log" 2>&1 || true
+@@ -530,6 +553,11 @@
+     *) echo none ;;
+   esac
+ }
++# D3DMetal's library path for every backend, as CrossOver sets it: D3DMetal pieces look it up
++# even when another renderer draws.
++if [ -f "$CX_ROOT/lib/external/libd3dshared.dylib" ]; then
++  export CX_APPLEGPTK_LIBD3DSHARED_PATH="$CX_ROOT/lib/external/libd3dshared.dylib"
++fi
+ if [ "$runner_kind" = selfbuilt ]; then
+   backend="${CX_GRAPHICS_BACKEND:-auto}"
+   backend_from=launch-options
+@@ -594,6 +622,16 @@
+ # game explicitly. edit_file takes a path under the prefix user's profile, one * allowed.
+ fix_env=""
+ fix_file="$HOME/Library/Application Support/notproton/fixes/$app_id.sh"
++# Automatic fixes (notproton/autofix): detected per game before launch; a hand-written fix file
++# below still runs after them and wins.
++autofix_dir="$HOME/Library/Application Support/notproton/autofix"
++if [ "$verb" = waitforexitandrun ] && [ -r "$autofix_dir/autofix.sh" ]; then
++  # shellcheck disable=SC2034 # read by autofix.sh
++  AUTOFIX_DIR="$autofix_dir"
++  # shellcheck source=/dev/null # installed by install.sh at run time
++  . "$autofix_dir/autofix.sh"
++  autofix_run "$1" || echo "=== autofix failed ===" >> "$log" 2>&1 || true
++fi
+ # shellcheck disable=SC2329 # the helpers are called from the sourced fix file
+ if [ "$verb" = waitforexitandrun ] && [ -r "$fix_file" ]; then
+   set_env() { export "$1=$2"; fix_env="$fix_env $1"; echo "fix: env $1=$2" >> "$log" 2>&1 || true; }
+@@ -616,6 +654,11 @@
+ echo "launch_env=$launch_env" >> "$log" 2>&1 || true
+ echo "=== launching ($verb): $WINELOADER $* ===" >> "$log" 2>&1 || true
+ 
++# Command line changes recorded by autofix (append_arg, replace_exe); autofix_argv prints only
++# shell-quoted words, so this eval only re-reads the arguments.
++if command -v autofix_argv >/dev/null 2>&1; then
++  eval "set -- $(autofix_argv "$@")"
++fi
+ target="$1"
+ case "$target" in
+   "$STEAM_COMPAT_INSTALL_PATH"/*) foreground=1 ;;
+@@ -931,6 +974,7 @@
+   fi
+   sleep 1
+ done
++command -v autofix_post >/dev/null 2>&1 && { autofix_post || true; }
+ echo "=== game exited status=$status, killing wine prefix ===" >> "$log" 2>&1 || true
+ kill_wine_prefix
+ echo "=== wine prefix killed, session ending ===" >> "$log" 2>&1 || true

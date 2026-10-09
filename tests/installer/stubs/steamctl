@@ -1,0 +1,47 @@
+#!/bin/bash
+# Test stub for "is Steam running / quit Steam / start Steam" (NP_TEST_STEAMCTL).
+# State lives in $NP_TEST_ROOT/ctl: steam-running (exists = running), steam-refuses-quit,
+# update-on-quit (Steam replaces steamclient.dylib while quitting), log-mode (good|partial|none)
+# for the notproton.log lines a "started" Steam writes.
+set -euo pipefail
+ctl="$NP_TEST_ROOT/ctl"
+mkdir -p "$ctl"
+echo "$1" >> "$ctl/steamctl.log"
+case "$1" in
+    running) [ -e "$ctl/steam-running" ] ;;
+    quit)
+        [ -e "$ctl/steam-refuses-quit" ] || rm -f "$ctl/steam-running"
+        # Steam updating its client on the way out.
+        if [ -e "$ctl/update-on-quit" ]; then
+            echo "steamclient updated on quit" > "$NP_STEAM_SUPPORT/Steam.AppBundle/Steam/Contents/MacOS/steamclient.dylib"
+        fi
+        ;;
+    start)
+        touch "$ctl/steam-running"
+        mode="$(cat "$ctl/log-mode" 2>/dev/null || echo good)"
+        log="$NP_SUPPORT/notproton.log"
+        ts="2026-10-09 22:00:00 [notproton] info"
+        mkdir -p "$NP_SUPPORT"
+        case "$mode" in
+            good)
+                printf '%s np_init: loaded into steam_osx (pid 1) version 1.0.3\n' "$ts" >> "$log"
+                printf '%s install_thread: signatures 15/15 resolved\n' "$ts" >> "$log"
+                printf '%s install_thread: ready, 8/8 hooks installed\n' "$ts" >> "$log"
+                printf '%s install_thread: steamui.dylib signatures 2/2 resolved\n' "$ts" >> "$log"
+                printf '%s install_thread: steamui.dylib ready, 2/2 hooks installed\n' "$ts" >> "$log"
+                tool="$NP_STEAM_SUPPORT/compatibilitytools.d/notproton"
+                mkdir -p "$tool"
+                cp "$NP_TEST_REPO/notproton/dylib/feats/compat_run.sh" "$tool/run"
+                ;;
+            partial)
+                printf '%s np_init: loaded into steam_osx (pid 1) version 1.0.3\n' "$ts" >> "$log"
+                printf '%s install_thread: signatures 15/15 resolved\n' "$ts" >> "$log"
+                printf '%s install_thread: ready, 6/8 hooks installed\n' "$ts" >> "$log"
+                printf '%s install_thread: steamui.dylib signatures 1/2 resolved\n' "$ts" >> "$log"
+                printf '%s install_thread: steamui.dylib ready, 1/1 hooks installed\n' "$ts" >> "$log"
+                ;;
+            none) ;;
+        esac
+        ;;
+    *) exit 2 ;;
+esac

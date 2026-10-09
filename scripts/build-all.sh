@@ -52,12 +52,9 @@ step "Valve's Windows Steam DLLs (Valve CDN, hash-checked)"
 run valve "$ROOT/scripts/fetch-valve-bridge.sh"
 
 step "NotProton fork: Dobby, notproton.dylib, overlay shim, helpers"
-# Our changes to the notproton submodule (patches/notproton/*.patch), applied once.
-for p in "$ROOT"/patches/notproton/*.patch; do
-    [ -f "$p" ] || continue
-    git -C "$ROOT/notproton" apply --reverse --check "$p" 2>/dev/null && continue
-    git -C "$ROOT/notproton" apply "$p" || { echo "notproton patch failed: $p" >&2; exit 1; }
-done
+# Our changes to the notproton submodule (patches/notproton/*.patch), applied once, as a series
+# (a later patch may change lines an earlier one added).
+"$ROOT/scripts/apply-notproton-patches.sh" >/dev/null || { echo "notproton patches failed" >&2; exit 1; }
 # Dobby at commit 5dfc8546954c as GitHub's archive tarball (same tree as the commit, checked
 # by diffing both), pinned by sha256.
 [ -f "$ROOT/notproton/vendor/dobby/CMakeLists.txt" ] || {

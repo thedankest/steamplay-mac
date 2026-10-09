@@ -1,0 +1,12 @@
+# Runner A release pin, read by `scripts/install.sh all --from release`.
+#
+# Filled in by hand after the first CI run of .github/workflows/runner-a.yml with release=true:
+#   version  the release's runner version, e.g. selfbuilt-cx26.3-r1-1a2b3c4d (installed as
+#            runners/<version>; letters, digits, '.', '_' and '-' only)
+#   url      https://github.com/thedankest/steamplay-mac/releases/download/runner-a-<version>/runner-a-<version>.tar.zst
+#   sha256   SHA-256 of that .tar.zst, checked against the CI log and the downloaded file.
+#            The release's own .sha256 asset is not a pin; this committed value is.
+# The installer refuses --from release while sha256 is empty.
+version=
+url=
+sha256=

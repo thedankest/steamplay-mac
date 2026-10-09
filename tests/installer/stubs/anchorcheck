@@ -1,0 +1,64 @@
+#!/bin/bash
+# Test stub for notproton's anchorcheck. Like the real tool: with no argument it checks every
+# profile in signatures/macos.arm64 (relative to the working directory), with one argument only
+# that profile; the profile matching the "installed client" is marked [live client]. The live
+# build is $NP_TEST_ROOT/ctl/live-build (default 1788400362). Mode in ctl/anchor-mode:
+#   pass        the live profile resolves fully, exit 0
+#   crossdb     like pass, but the all-profiles run also reports a CROSS-DB DISAGREEMENT and a
+#               failing non-live row, exit 1 (the single-profile run is clean)
+#   nolive      no profile matches the client: no [live client] block, exit 0
+#   fail        the live profile has 2 unresolved anchors, exit 1
+#   singlefail  the all-profiles run looks fine, the single-profile run exits 1
+#   garbage     exit 0 but no summary lines at all
+#   rcfail      everything resolves, but exit 1 (e.g. a vptr or AOB check failed)
+#   wronglive   the live block names a build that has no profile file
+#   wrongpath   the live block's header path is not <build>.json
+#   twolive     two blocks marked live
+set -euo pipefail
+mode="$(cat "$NP_TEST_ROOT/ctl/anchor-mode" 2>/dev/null || echo pass)"
+live="$(cat "$NP_TEST_ROOT/ctl/live-build" 2>/dev/null || echo 1788400362)"
+echo "$# $*" >> "$NP_TEST_ROOT/ctl/anchorcheck.log"
+printf 'image  : %s/Library/Application Support/Steam/Steam.AppBundle/Steam/Contents/MacOS/steamclient.dylib\nslide  : 0x0\n__TEXT : 0x0 (0 bytes)\n\n' "$HOME"
+[ "$mode" = garbage ] && { echo "something unexpected"; exit 0; }
+if [ $# -gt 0 ]; then profiles=("$@"); else profiles=(signatures/macos.arm64/*.json); fi
+rc=0
+nlive=0
+for prof in "${profiles[@]}"; do
+    [ -f "$prof" ] || { echo "cannot load sigdb '$prof'" >&2; exit 2; }
+    n="$(jq '.signatures | length' "$prof")"
+    b="$(basename "$prof" .json)"
+    is_live=0
+    case "$mode" in
+        pass|crossdb|fail|rcfail|singlefail|wrongpath) [ "$b" = "$live" ] && is_live=1 ;;
+        twolive) [ "$nlive" -lt 2 ] && is_live=1 ;;
+    esac
+    if [ "$is_live" = 1 ]; then
+        nlive=$((nlive + 1))
+        if [ "$mode" = wrongpath ]; then
+            printf 'signatures/macos.arm64/other.json  build %s  [live client]\n' "$b"
+        else
+            printf '%s  build %s  [live client]\n' "$prof" "$b"
+        fi
+        if [ "$mode" = fail ]; then
+            printf '  %d anchors resolved, 2 unresolved; %d of %d recorded addresses matched\n\n' "$((n - 2))" "$((n - 2))" "$n"
+            rc=1
+        else
+            printf '  %d anchors resolved, 0 unresolved; %d of %d recorded addresses matched\n\n' "$n" "$n" "$n"
+        fi
+    elif [ "$mode" = crossdb ] && [ $# -eq 0 ]; then
+        printf '%s  build %s\n  %d anchors resolved, 1 unresolved; recorded addresses and patterns describe another build\n\n' "$prof" "$b" "$((n - 1))"
+    else
+        printf '%s  build %s\n  %d anchors resolved, 0 unresolved; recorded addresses and patterns describe another build\n\n' "$prof" "$b" "$n"
+    fi
+done
+if [ "$mode" = wronglive ]; then
+    printf 'signatures/macos.arm64/1799999999.json  build 1799999999  [live client]\n  17 anchors resolved, 0 unresolved; 17 of 17 recorded addresses matched\n\n'
+fi
+if [ "$mode" = crossdb ] && [ $# -eq 0 ]; then
+    echo "CROSS-DB DISAGREEMENT SomeFunction                             1788400362=0x10 1790904859=0x20"
+    rc=1
+fi
+[ "$mode" = singlefail ] && [ $# -gt 0 ] && rc=1
+[ "$mode" = nolive ] && echo "no database describes the running client, so only the anchors were checked."
+[ "$mode" = rcfail ] && rc=1
+exit "$rc"

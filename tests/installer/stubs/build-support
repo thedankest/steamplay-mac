@@ -1,0 +1,12 @@
+#!/bin/bash
+# Test stub for the local support build (NP_TEST_BUILD_SUPPORT <stage>): a real (tiny) dylib so
+# codesign works on it inside the fake Steam.app, dummy helpers, and the anchorcheck stub.
+# $NP_TEST_ROOT/ctl/dylib-variant (a|b) picks which prebuilt dylib, to test a changed dylib.
+set -euo pipefail
+st="${1:?stage}"
+v="$(cat "$NP_TEST_ROOT/ctl/dylib-variant" 2>/dev/null || echo a)"
+cp "$NP_TEST_ROOT/bin/notproton-$v.dylib" "$st/notproton.dylib"
+cp "$NP_TEST_ROOT/bin/notproton-a.dylib" "$st/overlay-shim.dylib"
+for f in iconmaker appinfo pe-d3d syshud; do printf '#!/bin/sh\necho %s\n' "$f" > "$st/$f"; chmod 755 "$st/$f"; done
+cp "$(dirname "$0")/anchorcheck" "$st/anchorcheck"
+chmod 755 "$st/anchorcheck"

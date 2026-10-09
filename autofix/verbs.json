@@ -1,0 +1,343 @@
+{
+  "schema": 1,
+  "meta": {
+    "about": "Pinned verb table for autofix/verbs.sh (np_verb). URL and SHA-256 facts are taken from winetricks (LGPL-2.1) and cross-checked where another source exists. A file whose sha256 is null or that is marked unverified is never downloaded: the verb refuses to run.",
+    "winetricks": "https://github.com/Winetricks/winetricks/blob/f3890f670867b5ffbc3938726db45c0f7d16c8ba/src/winetricks",
+    "checked": "2026-10-09; sizes from HTTP Content-Length (HEAD requests), openal-soft from the GitHub release API digest",
+    "paths": "file/find paths are relative to $WINEPREFIX; cache paths are relative to $NOTPROTON_CACHE (default ~/Library/Application Support/notproton/cache). The prefix is always win64: system32 holds 64-bit DLLs, syswow64 32-bit ones.",
+    "checks": "installed: every entry must pass. {file, native}: file exists (and is not a Wine builtin/placeholder DLL when native is true). {find, name, ipath, maxdepth}: a match exists. {cache}: file exists in the cache. {any: [...]}: one of the nested checks passes."
+  },
+  "verbs": {
+    "openal-soft": {
+      "title": "OpenAL Soft 1.25.2 (cache only: Win32/Win64 soft_oal.dll for the creative-openal detector)",
+      "source": "github.com/kcat/openal-soft release 1.25.2; zip digest confirmed by the GitHub release API; Win32 DLL hash recorded in COMPAT.md",
+      "prefix": false,
+      "files": [
+        {
+          "url": "https://github.com/kcat/openal-soft/releases/download/1.25.2/openal-soft-1.25.2-bin.zip",
+          "sha256": "67a0c4b800bd860c93c04f38caf8cbe4875f9c84700ac430efc451f70e265434",
+          "size": 18574944,
+          "cache": "openal-soft/openal-soft-1.25.2-bin.zip"
+        }
+      ],
+      "installed": [
+        {"cache": "openal-soft-1.25.2/Win32/soft_oal.dll"},
+        {"cache": "openal-soft-1.25.2/Win64/soft_oal.dll"}
+      ],
+      "steps": [
+        {
+          "type": "zip_extract",
+          "file": 0,
+          "dest": "openal-soft-1.25.2",
+          "map": [
+            {"member": "*/Win32/soft_oal.dll", "to": "Win32/soft_oal.dll", "sha256": "606cf8b4c22c7ae00813585279ac045115907bc66d1483eb26355907021ea4b0"},
+            {"member": "*/Win64/soft_oal.dll", "to": "Win64/soft_oal.dll"}
+          ]
+        }
+      ]
+    },
+    "physx": {
+      "title": "NVIDIA PhysX System Software 9.23.1019 (includes the legacy 2.8.x runtime UE3 games load)",
+      "source": "winetricks load_physx (sha256 verified in source); winetricks marks it broken on Wine 9.5-9.10 (bug 56606)",
+      "files": [
+        {
+          "url": "https://us.download.nvidia.com/Windows/9.23.1019/PhysX_9.23.1019_SystemSoftware.exe",
+          "sha256": "9b42b84e881769d681e09f62a1b51532616b2e6a2d5d99d0ccae6eb5fbbc208c",
+          "size": 29417888,
+          "cache": "physx/PhysX_9.23.1019_SystemSoftware.exe"
+        }
+      ],
+      "installed": [
+        {"any": [
+          {"find": "drive_c/Program Files (x86)/NVIDIA Corporation/PhysX", "name": "PhysXCore.dll", "maxdepth": 5},
+          {"find": "drive_c/Program Files (x86)/AGEIA Technologies", "name": "PhysXCore.dll", "maxdepth": 5}
+        ]}
+      ],
+      "steps": [
+        {"type": "exe_silent", "file": 0, "args": ["/s"]}
+      ]
+    },
+    "physx_legacy": {
+      "title": "NVIDIA PhysX 9.13.0604 legacy system software (PhysX SDK 2.7 and older)",
+      "source": "nvidia.com/object/physx-9.13.0604-legacy-driver.html; URL answers HTTP 200 (HEAD), no published SHA-256",
+      "files": [
+        {
+          "url": "https://us.download.nvidia.com/Windows/9.13.0604/PhysX-9.13.0604-SystemSoftware-Legacy.msi",
+          "sha256": null,
+          "unverified": true,
+          "size": 20154368,
+          "cache": "physx_legacy/PhysX-9.13.0604-SystemSoftware-Legacy.msi"
+        }
+      ],
+      "installed": [
+        {"any": [
+          {"find": "drive_c/Program Files (x86)/NVIDIA Corporation/PhysX", "name": "PhysXCore.dll", "maxdepth": 5},
+          {"find": "drive_c/Program Files (x86)/AGEIA Technologies", "name": "PhysXCore.dll", "maxdepth": 5}
+        ]}
+      ],
+      "steps": [
+        {"type": "msi_qn", "file": 0}
+      ]
+    },
+    "vcrun2005": {
+      "title": "Visual C++ 2005 SP1 (ATL security update) runtimes, x86 + x64",
+      "source": "winetricks load_vcrun2005",
+      "files": [
+        {"url": "https://download.microsoft.com/download/8/B/4/8B42259F-5D70-43F4-AC2E-4B208FD8D66A/vcredist_x86.EXE", "sha256": "8648c5fc29c44b9112fe52f9a33f80e7fc42d10f3b5b42b2121542a13e44adfd", "size": 2710520, "cache": "vcrun2005/vcredist_x86.exe"},
+        {"url": "https://download.microsoft.com/download/8/B/4/8B42259F-5D70-43F4-AC2E-4B208FD8D66A/vcredist_x64.EXE", "sha256": "4487570bd86e2e1aac29db2a1d0a91eb63361fcaac570808eb327cd4e0e2240d", "size": 3179000, "cache": "vcrun2005/vcredist_x64.exe"}
+      ],
+      "installed": [
+        {"find": "drive_c/windows/winsxs", "name": "mfc80.dll", "ipath": "*x86_microsoft.vc80.mfc_1fc8b3b9a1e18e3b_8.0.50727.6195_*", "maxdepth": 2}
+      ],
+      "steps": [
+        {"type": "dll_override", "mode": "native,builtin", "dlls": ["atl80", "msvcm80", "msvcp80", "msvcr80", "vcomp"]},
+        {"type": "exe_silent", "file": 0, "args": ["/q"]},
+        {"type": "exe_silent", "file": 1, "args": ["/q"]}
+      ]
+    },
+    "vcrun2008": {
+      "title": "Visual C++ 2008 SP1 runtimes, x86 + x64",
+      "source": "winetricks load_vcrun2008",
+      "files": [
+        {"url": "https://download.microsoft.com/download/5/D/8/5D8C65CB-C849-4025-8E95-C3966CAFD8AE/vcredist_x86.exe", "sha256": "8742bcbf24ef328a72d2a27b693cc7071e38d3bb4b9b44dec42aa3d2c8d61d92", "size": 4483040, "cache": "vcrun2008/vcredist_x86.exe"},
+        {"url": "https://download.microsoft.com/download/5/D/8/5D8C65CB-C849-4025-8E95-C3966CAFD8AE/vcredist_x64.exe", "sha256": "c5e273a4a16ab4d5471e91c7477719a2f45ddadb76c7f98a38fa5074a6838654", "size": 5211080, "cache": "vcrun2008/vcredist_x64.exe"}
+      ],
+      "installed": [
+        {"file": "drive_c/Program Files (x86)/Common Files/Microsoft Shared/VC/msdia90.dll"}
+      ],
+      "steps": [
+        {"type": "dll_override", "mode": "native,builtin", "dlls": ["atl90", "msvcm90", "msvcp90", "msvcr90", "vcomp90"]},
+        {"type": "exe_silent", "file": 0, "args": ["/q"]},
+        {"type": "exe_silent", "file": 1, "args": ["/q"]}
+      ]
+    },
+    "vcrun2010": {
+      "title": "Visual C++ 2010 SP1 runtimes, x86 + x64",
+      "source": "winetricks load_vcrun2010",
+      "files": [
+        {"url": "https://download.microsoft.com/download/5/B/C/5BC5DBB3-652D-4DCE-B14A-475AB85EEF6E/vcredist_x86.exe", "sha256": "31d32fa39d52cac9a765a43660431f7a127eee784b54b2f5e2af3e2b763a1af8", "size": 5076456, "cache": "vcrun2010/vcredist_x86.exe"},
+        {"url": "https://download.microsoft.com/download/A/8/0/A80747C3-41BD-45DF-B505-E9710D2744E0/vcredist_x64.exe", "sha256": "2fddbc3aaaab784c16bc673c3bae5f80929d5b372810dbc28649283566d33255", "size": 5677032, "cache": "vcrun2010/vcredist_x64.exe"}
+      ],
+      "installed": [
+        {"file": "drive_c/windows/syswow64/mfc100.dll", "native": true},
+        {"file": "drive_c/windows/system32/mfc100.dll", "native": true}
+      ],
+      "steps": [
+        {"type": "dll_override", "mode": "native,builtin", "dlls": ["msvcp100", "msvcr100", "vcomp100", "atl100"]},
+        {"type": "exe_silent", "file": 0, "args": ["/q"]},
+        {"type": "exe_silent", "file": 1, "args": ["/q"]}
+      ]
+    },
+    "vcrun2012": {
+      "title": "Visual C++ 2012 Update 4 runtimes, x86 + x64",
+      "source": "winetricks load_vcrun2012",
+      "files": [
+        {"url": "https://download.microsoft.com/download/1/6/B/16B06F60-3B20-4FF2-B699-5E9B7962F9AE/VSU_4/vcredist_x86.exe", "sha256": "b924ad8062eaf4e70437c8be50fa612162795ff0839479546ce907ffa8d6e386", "size": 6554576, "cache": "vcrun2012/vcredist_x86.exe"},
+        {"url": "https://download.microsoft.com/download/1/6/B/16B06F60-3B20-4FF2-B699-5E9B7962F9AE/VSU_4/vcredist_x64.exe", "sha256": "681be3e5ba9fd3da02c09d7e565adfa078640ed66a0d58583efad2c1e3cc4064", "size": 7186992, "cache": "vcrun2012/vcredist_x64.exe"}
+      ],
+      "installed": [
+        {"file": "drive_c/windows/syswow64/mfc110.dll", "native": true},
+        {"file": "drive_c/windows/system32/mfc110.dll", "native": true}
+      ],
+      "steps": [
+        {"type": "dll_override", "mode": "native,builtin", "dlls": ["atl110", "msvcp110", "msvcr110", "vcomp110"]},
+        {"type": "exe_silent", "file": 0, "args": ["/q"]},
+        {"type": "exe_silent", "file": 1, "args": ["/q"]}
+      ]
+    },
+    "vcrun2013": {
+      "title": "Visual C++ 2013 runtimes, x86 + x64",
+      "source": "winetricks load_vcrun2013",
+      "files": [
+        {"url": "https://download.microsoft.com/download/0/5/6/056dcda9-d667-4e27-8001-8a0c6971d6b1/vcredist_x86.exe", "sha256": "89f4e593ea5541d1c53f983923124f9fd061a1c0c967339109e375c661573c17", "size": 6510544, "cache": "vcrun2013/vcredist_x86.exe"},
+        {"url": "https://download.microsoft.com/download/0/5/6/056dcda9-d667-4e27-8001-8a0c6971d6b1/vcredist_x64.exe", "sha256": "20e2645b7cd5873b1fa3462b99a665ac8d6e14aae83ded9d875fea35ffdd7d7e", "size": 7201032, "cache": "vcrun2013/vcredist_x64.exe"}
+      ],
+      "installed": [
+        {"file": "drive_c/windows/syswow64/mfc120.dll", "native": true},
+        {"file": "drive_c/windows/system32/mfc120.dll", "native": true}
+      ],
+      "steps": [
+        {"type": "dll_override", "mode": "native,builtin", "dlls": ["atl120", "msvcp120", "msvcr120", "vcomp120"]},
+        {"type": "exe_silent", "file": 0, "args": ["/q"]},
+        {"type": "exe_silent", "file": 1, "args": ["/q"]}
+      ]
+    },
+    "vcrun2015": {"title": "Visual C++ 2015 (served by the binary-compatible 2015-2022 runtime)", "alias": "vcrun2022"},
+    "vcrun2017": {"title": "Visual C++ 2017 (served by the binary-compatible 2015-2022 runtime)", "alias": "vcrun2022"},
+    "vcrun2019": {"title": "Visual C++ 2019 (served by the binary-compatible 2015-2022 runtime)", "alias": "vcrun2022"},
+    "mfc140": {"title": "MFC 14.0 (part of the 2015-2022 runtime)", "alias": "vcrun2022"},
+    "vcrun2022": {
+      "title": "Visual C++ 2015-2022 runtimes 14.44.35211, x86 + x64",
+      "source": "winetricks load_vcrun2022 (hashes, moving aka.ms/vs/17 URL); the versioned 14.44.35211 URL and the same hashes are in highball-db recipes/tweaks/vcrun2022.json",
+      "files": [
+        {"url": "https://aka.ms/vs/17/release/14.44.35211/VC_redist.x86.exe", "sha256": "0c09f2611660441084ce0df425c51c11e147e6447963c3690f97e0b25c55ed64", "size": 13953392, "cache": "vcrun2022/VC_redist.14.44.35211.x86.exe"},
+        {"url": "https://aka.ms/vs/17/release/14.44.35211/VC_redist.x64.exe", "sha256": "cc0ff0eb1dc3f5188ae6300faef32bf5beeba4bdd6e8e445a9184072096b713b", "size": 25635768, "cache": "vcrun2022/VC_redist.14.44.35211.x64.exe"}
+      ],
+      "installed": [
+        {"file": "drive_c/windows/syswow64/mfc140.dll", "native": true},
+        {"file": "drive_c/windows/system32/mfc140.dll", "native": true}
+      ],
+      "steps": [
+        {"type": "dll_override", "mode": "native,builtin", "dlls": ["concrt140", "msvcp140", "msvcp140_1", "msvcp140_2", "msvcp140_atomic_wait", "msvcp140_codecvt_ids", "vcamp140", "vccorlib140", "vcomp140", "vcruntime140", "vcruntime140_1"]},
+        {"type": "exe_silent", "file": 0, "args": ["/q"]},
+        {"type": "exe_silent", "file": 1, "args": ["/q"]}
+      ]
+    },
+    "d3dx9": {
+      "title": "d3dx9_24..43 from the DirectX June 2010 redistributable (x86 + x64)",
+      "source": "winetricks helper_directx_Jun2010 + load_d3dx9",
+      "files": [
+        {"url": "https://download.microsoft.com/download/8/4/A/84A35BF1-DAFE-4AE8-82AF-AD2AE20B6B14/directx_Jun2010_redist.exe", "sha256": "053f76dcbb28802e23341b6a787e3b0791c0fa5c8d4d011b1044172dbf89c73b", "size": 100275120, "cache": "directx9/directx_Jun2010_redist.exe"}
+      ],
+      "installed": [
+        {"file": "drive_c/windows/syswow64/d3dx9_43.dll", "native": true}
+      ],
+      "steps": [
+        {"type": "extract_dll_to", "file": 0, "outer": "*d3dx9*x86*.cab", "member": "d3dx9*.dll", "dest": "syswow64"},
+        {"type": "extract_dll_to", "file": 0, "outer": "*d3dx9*x64*.cab", "member": "d3dx9*.dll", "dest": "system32"},
+        {"type": "dll_override", "mode": "native", "dlls": ["d3dx9_24", "d3dx9_25", "d3dx9_26", "d3dx9_27", "d3dx9_28", "d3dx9_29", "d3dx9_30", "d3dx9_31", "d3dx9_32", "d3dx9_33", "d3dx9_34", "d3dx9_35", "d3dx9_36", "d3dx9_37", "d3dx9_38", "d3dx9_39", "d3dx9_40", "d3dx9_41", "d3dx9_42", "d3dx9_43"]}
+      ]
+    },
+    "d3dx9_43": {"title": "d3dx9_43 (served by d3dx9, which installs every d3dx9_xx)", "alias": "d3dx9"},
+    "d3dx9_24": {"title": "d3dx9_24 (served by d3dx9)", "alias": "d3dx9"},
+    "d3dx9_25": {"title": "d3dx9_25 (served by d3dx9)", "alias": "d3dx9"},
+    "d3dx9_26": {"title": "d3dx9_26 (served by d3dx9)", "alias": "d3dx9"},
+    "d3dx9_27": {"title": "d3dx9_27 (served by d3dx9)", "alias": "d3dx9"},
+    "d3dx9_28": {"title": "d3dx9_28 (served by d3dx9)", "alias": "d3dx9"},
+    "d3dx9_29": {"title": "d3dx9_29 (served by d3dx9)", "alias": "d3dx9"},
+    "d3dx9_30": {"title": "d3dx9_30 (served by d3dx9)", "alias": "d3dx9"},
+    "d3dx9_31": {"title": "d3dx9_31 (served by d3dx9)", "alias": "d3dx9"},
+    "d3dx9_32": {"title": "d3dx9_32 (served by d3dx9)", "alias": "d3dx9"},
+    "d3dx9_33": {"title": "d3dx9_33 (served by d3dx9)", "alias": "d3dx9"},
+    "d3dx9_34": {"title": "d3dx9_34 (served by d3dx9)", "alias": "d3dx9"},
+    "d3dx9_35": {"title": "d3dx9_35 (served by d3dx9)", "alias": "d3dx9"},
+    "d3dx9_36": {"title": "d3dx9_36 (served by d3dx9)", "alias": "d3dx9"},
+    "d3dx9_37": {"title": "d3dx9_37 (served by d3dx9)", "alias": "d3dx9"},
+    "d3dx9_38": {"title": "d3dx9_38 (served by d3dx9)", "alias": "d3dx9"},
+    "d3dx9_39": {"title": "d3dx9_39 (served by d3dx9)", "alias": "d3dx9"},
+    "d3dx9_40": {"title": "d3dx9_40 (served by d3dx9)", "alias": "d3dx9"},
+    "d3dx9_41": {"title": "d3dx9_41 (served by d3dx9)", "alias": "d3dx9"},
+    "d3dx9_42": {"title": "d3dx9_42 (served by d3dx9)", "alias": "d3dx9"},
+    "d3dx11_43": {
+      "title": "d3dx11_43 from the DirectX June 2010 redistributable (x86 + x64)",
+      "source": "winetricks helper_d3dx11_xx pattern (same June 2010 file)",
+      "files": [
+        {"url": "https://download.microsoft.com/download/8/4/A/84A35BF1-DAFE-4AE8-82AF-AD2AE20B6B14/directx_Jun2010_redist.exe", "sha256": "053f76dcbb28802e23341b6a787e3b0791c0fa5c8d4d011b1044172dbf89c73b", "size": 100275120, "cache": "directx9/directx_Jun2010_redist.exe"}
+      ],
+      "installed": [
+        {"file": "drive_c/windows/syswow64/d3dx11_43.dll", "native": true}
+      ],
+      "steps": [
+        {"type": "extract_dll_to", "file": 0, "outer": "*d3dx11_43*x86*.cab", "member": "d3dx11_43.dll", "dest": "syswow64"},
+        {"type": "extract_dll_to", "file": 0, "outer": "*d3dx11_43*x64*.cab", "member": "d3dx11_43.dll", "dest": "system32"},
+        {"type": "dll_override", "mode": "native", "dlls": ["d3dx11_43"]}
+      ]
+    },
+    "d3dcompiler_43": {
+      "title": "d3dcompiler_43 from the DirectX June 2010 redistributable (x86 + x64)",
+      "source": "winetricks load_d3dcompiler_43",
+      "files": [
+        {"url": "https://download.microsoft.com/download/8/4/A/84A35BF1-DAFE-4AE8-82AF-AD2AE20B6B14/directx_Jun2010_redist.exe", "sha256": "053f76dcbb28802e23341b6a787e3b0791c0fa5c8d4d011b1044172dbf89c73b", "size": 100275120, "cache": "directx9/directx_Jun2010_redist.exe"}
+      ],
+      "installed": [
+        {"file": "drive_c/windows/syswow64/d3dcompiler_43.dll", "native": true}
+      ],
+      "steps": [
+        {"type": "extract_dll_to", "file": 0, "outer": "*d3dcompiler_43*x86*.cab", "member": "d3dcompiler_43.dll", "dest": "syswow64"},
+        {"type": "extract_dll_to", "file": 0, "outer": "*d3dcompiler_43*x64*.cab", "member": "d3dcompiler_43.dll", "dest": "system32"},
+        {"type": "dll_override", "mode": "native", "dlls": ["d3dcompiler_43"]}
+      ]
+    },
+    "d3dcompiler_47": {
+      "title": "d3dcompiler_47 from the Windows 8.1 SDK standalone cabs (x86 + x64)",
+      "source": "winetricks load_d3dcompiler_47 downloads these cabs WITHOUT a checksum; no other published SHA-256 found, so the verb refuses to run until someone pins them",
+      "files": [
+        {"url": "https://download.microsoft.com/download/B/0/C/B0C80BA3-8AD6-4958-810B-6882485230B5/standalonesdk/Installers/2630bae9681db6a9f6722366f47d055c.cab", "sha256": null, "unverified": true, "size": 1488323, "cache": "d3dcompiler_47/2630bae9681db6a9f6722366f47d055c.cab"},
+        {"url": "https://download.microsoft.com/download/B/0/C/B0C80BA3-8AD6-4958-810B-6882485230B5/standalonesdk/Installers/61d57a7a82309cd161a854a6f4619e52.cab", "sha256": null, "unverified": true, "size": 1776364, "cache": "d3dcompiler_47/61d57a7a82309cd161a854a6f4619e52.cab"}
+      ],
+      "installed": [
+        {"file": "drive_c/windows/syswow64/d3dcompiler_47.dll", "native": true}
+      ],
+      "steps": [
+        {"type": "extract_dll_to", "file": 0, "member": "fila319f706acfa16d6707473ebf29bdc7f", "rename": "d3dcompiler_47.dll", "dest": "syswow64"},
+        {"type": "extract_dll_to", "file": 1, "member": "fil3585cb2ea5db13cc0838f8d06b5c9679", "rename": "d3dcompiler_47.dll", "dest": "system32"},
+        {"type": "dll_override", "mode": "native", "dlls": ["d3dcompiler_47"]}
+      ]
+    },
+    "xact": {
+      "title": "XACT / XAudio 2.0-2.7 / X3DAudio / XAPOFX, 32-bit only (as winetricks)",
+      "source": "winetricks load_xact",
+      "files": [
+        {"url": "https://download.microsoft.com/download/8/4/A/84A35BF1-DAFE-4AE8-82AF-AD2AE20B6B14/directx_Jun2010_redist.exe", "sha256": "053f76dcbb28802e23341b6a787e3b0791c0fa5c8d4d011b1044172dbf89c73b", "size": 100275120, "cache": "directx9/directx_Jun2010_redist.exe"}
+      ],
+      "installed": [
+        {"file": "drive_c/windows/syswow64/xactengine2_0.dll", "native": true}
+      ],
+      "steps": [
+        {"type": "extract_dll_to", "file": 0, "outer": "*_xact_*x86*.cab", "member": "xactengine*.dll", "dest": "syswow64"},
+        {"type": "extract_dll_to", "file": 0, "outer": "*_x3daudio_*x86*.cab", "member": "x3daudio*.dll", "dest": "syswow64"},
+        {"type": "extract_dll_to", "file": 0, "outer": "*_xaudio_*x86*.cab", "member": "xaudio*.dll", "dest": "syswow64"},
+        {"type": "extract_dll_to", "file": 0, "outer": "*_xaudio_*x86*.cab", "member": "xapofx*.dll", "dest": "syswow64"},
+        {"type": "dll_override", "mode": "native,builtin", "dlls": ["xaudio2_0", "xaudio2_1", "xaudio2_2", "xaudio2_3", "xaudio2_4", "xaudio2_5", "xaudio2_6", "xaudio2_7", "x3daudio1_0", "x3daudio1_1", "x3daudio1_2", "x3daudio1_3", "x3daudio1_4", "x3daudio1_5", "x3daudio1_6", "x3daudio1_7", "xapofx1_1", "xapofx1_2", "xapofx1_3", "xapofx1_4", "xapofx1_5", "xactengine2_0", "xactengine2_1", "xactengine2_2", "xactengine2_3", "xactengine2_4", "xactengine2_5", "xactengine2_6", "xactengine2_7", "xactengine2_8", "xactengine2_9", "xactengine2_10", "xactengine3_0", "xactengine3_1", "xactengine3_2", "xactengine3_3", "xactengine3_4", "xactengine3_5", "xactengine3_6", "xactengine3_7"]},
+        {"type": "regsvr32", "dir": "syswow64", "glob": "xactengine*.dll"},
+        {"type": "regsvr32", "dir": "syswow64", "glob": "xaudio2_[0-7].dll"}
+      ]
+    },
+    "xna40": {
+      "title": "XNA Framework Redistributable 4.0",
+      "source": "winetricks load_xna40 (web.archive.org copy of the Microsoft MSI); winetricks first installs dotnet40 for wine bug 30718, here Wine Mono is tried first",
+      "files": [
+        {"url": "https://web.archive.org/web/20120325002813/https://download.microsoft.com/download/A/C/2/AC2C903B-E6E8-42C2-9FD7-BEBAC362A930/xnafx40_redist.msi", "sha256": "e6c41d692ebcba854dad4b1c52bb7ddd05926bad3105595d6596b8bab01c25e7", "size": 7054336, "cache": "xna40/xnafx40_redist.msi"}
+      ],
+      "installed": [
+        {"file": "drive_c/Program Files (x86)/Common Files/Microsoft Shared/XNA/Framework/v4.0/XnaNative.dll"}
+      ],
+      "steps": [
+        {"type": "msi_qn", "file": 0}
+      ]
+    },
+    "dotnet40": {
+      "title": ".NET Framework 4.0 (removes Wine Mono; slow)",
+      "source": "winetricks load_dotnet40",
+      "experimental": true,
+      "timeout": 3600,
+      "files": [
+        {"url": "https://download.microsoft.com/download/9/5/A/95A9616B-7A37-4AF6-BC36-D6EA96C8DAAE/dotNetFx40_Full_x86_x64.exe", "sha256": "65e064258f2e418816b304f646ff9e87af101e4c9552ab064bb74d281c38659f", "size": 50449456, "cache": "dotnet40/dotNetFx40_Full_x86_x64.exe"}
+      ],
+      "installed": [
+        {"file": "drive_c/windows/Microsoft.NET/Framework/v4.0.30319/ngen.exe", "native": true}
+      ],
+      "steps": [
+        {"type": "remove_mono"},
+        {"type": "winver", "version": "winxp64", "restore": true},
+        {"type": "exe_silent", "file": 0, "args": ["/q", "/c:install.exe /q"], "env": ["WINEDLLOVERRIDES=fusion=b"]},
+        {"type": "dll_override", "mode": "native", "dlls": ["mscoree"]},
+        {"type": "reg", "key": "HKLM\\Software\\Microsoft\\NET Framework Setup\\NDP\\v4\\Full", "name": "Install", "regtype": "REG_DWORD", "data": "0001"},
+        {"type": "reg", "key": "HKLM\\Software\\Microsoft\\NET Framework Setup\\NDP\\v4\\Full", "name": "Version", "regtype": "REG_SZ", "data": "4.0.30319"},
+        {"type": "reg", "key": "HKLM\\Software\\Microsoft\\.NETFramework", "name": "OnlyUseLatestCLR", "regtype": "REG_DWORD", "data": "0001"},
+        {"type": "reg", "key": "HKLM\\Software\\Wow6432Node\\.NETFramework", "name": "OnlyUseLatestCLR", "regtype": "REG_DWORD", "data": "0001"},
+        {"type": "winver_restore"}
+      ]
+    },
+    "dotnet48": {
+      "title": ".NET Framework 4.8 (on top of dotnet40; 20-40 minutes under Wine; leaves the prefix on win7 like winetricks)",
+      "source": "winetricks load_dotnet48",
+      "experimental": true,
+      "timeout": 3600,
+      "requires": ["dotnet40"],
+      "files": [
+        {"url": "https://download.visualstudio.microsoft.com/download/pr/7afca223-55d2-470a-8edc-6a1739ae3252/abd170b4b0ec15ad0222a809b761a036/ndp48-x86-x64-allos-enu.exe", "sha256": "95889d6de3f2070c07790ad6cf2000d33d9a1bdfc6a381725ab82ab1c314fd53", "size": 72721568, "cache": "dotnet48/ndp48-x86-x64-allos-enu.exe"}
+      ],
+      "installed": [
+        {"file": "drive_c/windows/dotnet48.installed.workaround"}
+      ],
+      "steps": [
+        {"type": "remove_mono"},
+        {"type": "winver", "version": "win7"},
+        {"type": "exe_silent", "file": 0, "args": ["/sfxlang:1027", "/q", "/norestart"], "env": ["WINEDLLOVERRIDES=fusion=b"]},
+        {"type": "dll_override", "mode": "native", "dlls": ["mscoree"]},
+        {"type": "touch", "path": "drive_c/windows/dotnet48.installed.workaround"}
+      ]
+    }
+  }
+}

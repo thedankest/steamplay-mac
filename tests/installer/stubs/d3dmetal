@@ -1,0 +1,36 @@
+#!/bin/bash
+# Test stub for install-d3dmetal.sh <runner>. Mode in $NP_TEST_ROOT/ctl/d3d-mode:
+#   accept    installs fake D3DMetal files and writes lib/external/D3DMetal.files.sha256
+#   decline   exit 2
+#   evil      like accept, plus a symlink that leaves the runner
+#   license   like the real script without a terminal: prints the machine-readable
+#             "license-required <sha> <path>" line and exits 2, unless
+#             D3DMETAL_LICENSE_SHA256 equals the fake licence's hash
+set -euo pipefail
+r="${1:?runner}"
+[ -x "$r/bin/wine" ] || { echo "not a runner" >&2; exit 1; }
+mode="$(cat "$NP_TEST_ROOT/ctl/d3d-mode" 2>/dev/null || echo accept)"
+echo "$*" >> "$NP_TEST_ROOT/ctl/d3d.log"
+lic="$NP_TEST_ROOT/fake-License.rtf"
+[ -f "$lic" ] || printf '{\\rtf1 fake licence}\n' > "$lic"
+lsha="$(shasum -a 256 "$lic" | cut -c1-64)"
+case "$mode" in
+    decline) echo "not accepted; D3DMetal not installed" >&2; exit 2 ;;
+    license)
+        if [ "${D3DMETAL_LICENSE_SHA256:-}" != "$lsha" ]; then
+            echo "license-required $lsha $lic" >&2
+            exit 2
+        fi ;;
+esac
+mkdir -p "$r/lib/external/D3DMetal.framework/Versions/A" "$r/lib/renderers/d3dmetal/x86_64-windows"
+echo d3dmetal > "$r/lib/external/D3DMetal.framework/Versions/A/D3DMetal"
+ln -sfn A "$r/lib/external/D3DMetal.framework/Versions/Current"
+echo shared > "$r/lib/external/libd3dshared.dylib"
+echo d3d12 > "$r/lib/renderers/d3dmetal/x86_64-windows/d3d12.dll"
+cp "$lic" "$r/lib/external/D3DMetal-License.rtf"
+printf 'source=tarball\nversion=3.0\narchive_sha256=%s\nlicense_sha256=%s\n' "$(printf stub | shasum -a 256 | cut -c1-64)" "$lsha" > "$r/lib/external/D3DMetal.source"
+( cd "$r" && { find ./lib/external/D3DMetal.framework ./lib/renderers/d3dmetal -type f -print0
+               printf '%s\0' ./lib/external/libd3dshared.dylib ./lib/external/D3DMetal-License.rtf ./lib/external/D3DMetal.source; } \
+             | LC_ALL=C sort -z | xargs -0 shasum -a 256 ) > "$r/lib/external/D3DMetal.files.sha256"
+[ "$mode" = evil ] && ln -s /etc "$r/lib/external/evil"
+echo "fake D3DMetal installed into $r"

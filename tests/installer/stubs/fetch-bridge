@@ -1,0 +1,11 @@
+#!/bin/bash
+# Test stub for fetch-valve-bridge.sh: writes the fake "Valve" files named in
+# $NP_TEST_VALVE_MANIFEST into $OUT, with the content whose hash that manifest pins.
+set -euo pipefail
+: "${OUT:?}" "${CACHE:?}"
+mkdir -p "$OUT" "$CACHE"
+while read -r kind rel _ _ _; do
+    [ "$kind" = file ] || continue
+    mkdir -p "$(dirname "$OUT/$rel")"
+    printf 'fake valve %s\n' "$rel" > "$OUT/$rel"
+done < <(grep '^file ' "$NP_TEST_VALVE_MANIFEST")

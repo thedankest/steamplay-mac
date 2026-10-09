@@ -1,0 +1,44 @@
+// Synthetic installscript modelled on Alien Breed 3: Descent (22670): UE3Redist, DXAug09Redist,
+// vcredist_x86 with HasRunKey entries. Not copied from the game.
+"InstallScript"
+{
+	"Registry"
+	{
+		"HKEY_LOCAL_MACHINE\\Software\\Team17 Software Ltd.\\AlienBreed"
+		{
+			"string"
+			{
+				"Language"		"%language%"
+				"InstallDir"		"%INSTALLDIR%"
+			}
+		}
+	}
+	"Run Process"
+	{
+		"UE3Redist"
+		{
+			"HasRunKey"		"HKEY_LOCAL_MACHINE\\Software\\Team17 Software Ltd.\\AlienBreed\\UE3Redist"
+			"process 1"		"%INSTALLDIR%\\Binaries\\Redist\\UE3Redist.exe"
+			"command 1"		"/S"
+			"NoCleanUp"		"1"
+		}
+		"DirectX"
+		{
+			"HasRunKey"		"HKEY_LOCAL_MACHINE\\Software\\Valve\\Steam\\Apps\\22670"
+			"process 1"		"%INSTALLDIR%\\Redist\\DXAug09Redist\\DXSETUP.exe"
+			"command 1"		"/silent"
+			"NoCleanUp"		"1"
+		}
+		"vcredist"
+		{
+			"HasRunKey"		"HKEY_LOCAL_MACHINE\\Software\\Team17 Software Ltd.\\AlienBreed\\vcredist"
+			"process 1"		"%INSTALLDIR%\\Redist\\vcredist_x86.exe"
+			"command 1"		"/q"	[$WIN32]
+			"MinimumHasRunValue"	"1"
+		}
+		"Game Launcher Setup"
+		{
+			"process 1"		"%INSTALLDIR%\\Redist\\LauncherSetup.exe"
+		}
+	}
+}

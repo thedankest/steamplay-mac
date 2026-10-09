@@ -1,0 +1,43 @@
+diff --git a/dylib/feats/compat_run.sh b/dylib/feats/compat_run.sh
+--- a/dylib/feats/compat_run.sh
++++ b/dylib/feats/compat_run.sh
+@@ -4,6 +4,28 @@
+ 
+ verb="$1"
+ shift || true
++
++# Launch options and global.env lines below reach export and eval, so a variable name has to
++# be a plain identifier ([A-Za-z_][A-Za-z0-9_]*). An env-looking launch option with any other
++# name is dropped here, before it is exported; a crafted name is never evaluated.
++np_valid_name() {
++  case "$1" in
++    ''|[0-9]*|*[!A-Za-z0-9_]*) return 1 ;;
++  esac
++  return 0
++}
++argc=$#
++argi=0
++while [ "$argi" -lt "$argc" ]; do
++  arg="$1"
++  shift
++  case "$arg" in
++    CX_GRAPHICS*=*|CX_FWD_COMPAT_GL_CTX=*|D3DM_*=*|DXMT_*=*|DXVK_*=*|MTL_*=*|NOTPROTON_*=*|ROSETTA_*=*|WINE*=*)
++      if np_valid_name "${arg%%=*}"; then set -- "$@" "$arg"; fi ;;
++    *) set -- "$@" "$arg" ;;
++  esac
++  argi=$((argi+1))
++done
+ 
+ # Options set from the Compatibility page are passed along as
+ # launch options.
+@@ -40,7 +62,9 @@
+         launch_env="$launch_env $line"
+         ;;
+     esac
+-  done < "$global_env"
++  done <<NP_GLOBAL_ENV
++$(grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$global_env" || true)
++NP_GLOBAL_ENV
+ fi
+ 
+ case "$verb" in
