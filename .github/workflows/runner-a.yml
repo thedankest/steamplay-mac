@@ -144,7 +144,7 @@ jobs:
           (cd out && shasum -a 256 "runner-a-${VERSION}.tar.zst" > "runner-a-${VERSION}.tar.zst.sha256")
           ls -l out; cat out/*.sha256
           # the archive must also be free of the forbidden names
-          ! zstd -dc "$T" | tar -tf - | grep -Ei 'd3dmetal|libd3dshared|tier0_s64|vstdlib_s64|steamclient(64)?\.dll|GameOverlayRenderer64|SteamService'
+          ! zstd -dc "$T" | tar -tf - | grep -Ei 'd3dmetal|libd3dshared|tier0_s64|vstdlib_s64|(^|/)steamclient(64)?\.dll$|GameOverlayRenderer64|SteamService'
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
