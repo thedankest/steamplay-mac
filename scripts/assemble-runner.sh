@@ -84,28 +84,6 @@ cp "$dx/i386-windows/winemetal.dll" "$OUT/lib/wine/i386-windows/"
 cp "$dx/x86_64-unix/winemetal.so" "$OUT/lib/wine/x86_64-unix/"
 ln -s ../../../wine/x86_64-unix/winemetal.so "$R/x86_64-unix/winemetal.so"
 
-# --- D3DMetal from Game Porting Toolkit 3.0 (Apple licence: personal, non-commercial) ------
-# Gcenx's repack of Apple's GPTK 3.0 redistributable. Apple's licence allows non-commercial
-# redistribution on Apple hardware; it is fetched here and never committed.
-fetch https://github.com/Gcenx/game-porting-toolkit/releases/download/Game-Porting-Toolkit-3.0-3/game-porting-toolkit-3.0-3.tar.xz \
-    d377683937340f914823dbb2e1252b329cbf834ff58907d0293db8cebf0e392e game-porting-toolkit-3.0-3.tar.xz
-mkdir -p "$WORK/gptk"
-tar -xJf "$DL/game-porting-toolkit-3.0-3.tar.xz" -C "$WORK/gptk"
-g="$WORK/gptk/Game Porting Toolkit.app/Contents/Resources/wine/lib"
-mkdir -p "$OUT/lib/external"
-cp -R "$g/external/D3DMetal.framework" "$OUT/lib/external/"
-cp "$g/external/libd3dshared.dylib" "$OUT/lib/external/"
-R="$OUT/lib/renderers/d3dmetal"
-mkdir -p "$R/x86_64-windows" "$R/x86_64-unix"
-for d in d3d10 d3d11 d3d12 dxgi nvapi64 atidxx64; do
-    cp "$g/wine/x86_64-windows/$d.dll" "$R/x86_64-windows/$d.dll"
-    ln -s ../../../external/libd3dshared.dylib "$R/x86_64-unix/$d.so"
-done
-# DLSS -> MetalFX: the MetalFX NGX shim takes nvngx's place (as the MacPorts d3dmetal port does)
-cp "$g/wine/x86_64-windows/nvngx-on-metalfx.dll" "$R/x86_64-windows/nvngx.dll"
-ln -s ../../../external/libd3dshared.dylib "$R/x86_64-unix/nvngx.so"
-cp "$WORK/gptk/Game Porting Toolkit.app/Contents/Resources/License.rtf" "$OUT/lib/external/D3DMetal-License.rtf" 2>/dev/null || true
-
 # --- manifest -------------------------------------------------------------------------------
 wine_version="$("$OUT/bin/wine" --version 2>/dev/null || echo unknown)"
 cat > "$OUT/runner.json" <<EOF
@@ -116,10 +94,19 @@ cat > "$OUT/runner.json" <<EOF
   "wine": "$wine_version",
   "base": "CrossOver 26.3.0 sources",
   "patches": "$(cd "$ROOT/src/wine" && git rev-parse --short HEAD)",
-  "renderers": { "dxmt": "v0.80", "d3dmetal": "3.0" },
+  "renderers": { "dxmt": "v0.80" },
   "built": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 EOF
 rm -rf "$WORK"
+
+# --- D3DMetal (Apple licence: personal, non-commercial) -------------------------------------
+# Never part of a CI tarball (SKIP_D3DMETAL=1). Locally it needs the user's licence acceptance;
+# without it the runner is assembled without D3DMetal and scripts/install-d3dmetal.sh adds it.
+if [ "${SKIP_D3DMETAL:-0}" != 1 ]; then
+    rc=0; "$ROOT/scripts/install-d3dmetal.sh" "$OUT" || rc=$?
+    [ "$rc" = 0 ] || [ "$rc" = 2 ] || exit "$rc"
+    [ "$rc" = 0 ] || echo "D3DMetal skipped (licence not accepted); add it with scripts/install-d3dmetal.sh $OUT"
+fi
 du -sh "$OUT"
 echo "runner: $OUT"

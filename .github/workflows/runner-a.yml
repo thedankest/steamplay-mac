@@ -1,0 +1,173 @@
+# Runner A: CrossOver 26.3 Wine + patches/series, x86_64 Unix side, built on an Apple Silicon
+# runner exactly like the local scripts do (native arm64 tools, `clang -arch x86_64`, Rosetta).
+# The tarball carries NO Apple D3DMetal/GPTK and NO Valve DLLs; see ci/NOTES.md.
+name: runner-a
+on:
+  workflow_dispatch:
+    inputs:
+      runner_id:
+        description: "runner id (becomes <id>-<short sha> in the tarball name)"
+        default: selfbuilt-cx26.3-r1
+        type: string
+      release:
+        description: "also publish a GitHub Release with the tarball"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runner-a-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    # Apple Silicon on purpose: scripts/build-all.sh refuses non-arm64 hosts and hardcodes
+    # /opt/homebrew. Change to macos-15-xlarge (paid) for speed.
+    runs-on: macos-15
+    timeout-minutes: 360
+    env:
+      RUNNER_ID: ${{ inputs.runner_id || 'selfbuilt-cx26.3-r1' }}
+      SKIP_D3DMETAL: "1"
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          submodules: recursive
+
+      - name: version
+        id: ver
+        run: |
+          set -euo pipefail
+          v="${RUNNER_ID}-$(git rev-parse --short=8 HEAD)"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "VERSION=$v" >> "$GITHUB_ENV"
+          echo "checkout path: $PWD"
+          case "$PWD" in *" "*) echo "path has spaces" >&2; exit 1;; esac
+
+      - name: host check and Rosetta
+        run: |
+          set -euo pipefail
+          [ "$(uname -m)" = arm64 ]
+          if ! arch -x86_64 /usr/bin/true 2>/dev/null; then
+            sudo softwareupdate --install-rosetta --agree-to-license
+          fi
+          arch -x86_64 /usr/bin/true
+          arch -x86_64 /usr/bin/uname -m
+
+      - name: toolchain (Homebrew, arm64)
+        run: |
+          set -euo pipefail
+          brew install mingw-w64 bison flex meson ninja ccache cmake pkgconf autoconf \
+            llvm lld nasm freetype zstd
+          for f in mingw-w64 bison flex meson ninja ccache cmake pkgconf autoconf llvm lld nasm freetype; do
+            brew list --versions "$f"
+          done
+
+      - name: ccache
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: build/ccache   # build-wine.sh sets CCACHE_DIR=$ROOT/build/ccache
+          key: ccache-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('patches/**', 'scripts/**') }}
+          restore-keys: |
+            ccache-${{ runner.os }}-${{ runner.arch }}-
+
+      # Same order and scripts as build-all.sh, minus the steps Runner A does not need or must
+      # not have: fetch-valve-bridge.sh (Valve DLLs) and the NotProton fork build. The shim
+      # (steam.exe, built from stock wine-11.15 + notproton/bridge) IS needed by assemble.
+      - name: Wine sources (CrossOver 26.3.0 + patches)
+        run: scripts/prepare-wine-src.sh
+
+      - name: x86_64 host libraries (MoltenVK 1.4.2 pinned tarball, SDL2, FFmpeg, ...)
+        run: scripts/build-deps.sh
+
+      - name: Wine
+        run: |
+          ccache --max-size=2G || true
+          CCACHE_DIR="$PWD/build/ccache" ccache -z || true
+          scripts/build-wine.sh
+          CCACHE_DIR="$PWD/build/ccache" ccache -s || true
+
+      - name: steam.exe shim
+        run: scripts/build-steam-shim.sh
+
+      - name: assemble (Mono, Gecko, DXMT; no D3DMetal)
+        run: scripts/assemble-runner.sh "$RUNNER_ID"
+
+      - name: forbidden-content check
+        run: |
+          set -euo pipefail
+          R="dist/runners/$RUNNER_ID"
+          test -x "$R/bin/wine"
+          test -f "$R/lib/libMoltenVK.dylib"
+          ls "$R/share/wine/mono" | grep -q . ; ls "$R/share/wine/gecko"/*.msi
+          bad=0
+          # Apple D3DMetal / GPTK
+          if find "$R" \( -iname 'D3DMetal*' -o -iname 'libd3dshared*' -o -iname 'nvngx*' \
+                -o -iname '*game-porting-toolkit*' -o -iname '*gptk*' \) | grep .; then bad=1; fi
+          [ ! -e "$R/lib/external" ] && [ ! -e "$R/lib/renderers/d3dmetal" ] || { echo "d3dmetal dirs present"; bad=1; }
+          # Valve DLLs (names from notproton valve-packages.manifest / fetch-valve-bridge.sh)
+          if find "$R" \( -iname 'steamclient.dll' -o -iname 'steamclient64.dll' -o -iname 'tier0_s64.dll' \
+                -o -iname 'vstdlib_s64.dll' -o -iname 'Steam.dll' -o -iname 'SteamService.exe' \
+                -o -iname 'iscriptevaluator.exe' -o -iname 'GameOverlayRenderer64.dll' \
+                -o -iname 'legacycompat' \) | grep .; then bad=1; fi
+          # Belt and braces: Valve file hashes from the manifest
+          M=notproton/app/Sources/NotProtonApp/Resources/valve-packages.manifest
+          awk '$1=="file"{print $5}' "$M" | sort -u > /tmp/valve.sha
+          find "$R" -type f -exec shasum -a 256 {} + | awk '{print $1}' | sort -u > /tmp/runner.sha
+          if comm -12 /tmp/valve.sha /tmp/runner.sha | grep .; then echo "Valve file hash found"; bad=1; fi
+          grep -q d3dmetal "$R/runner.json" && { echo "runner.json mentions d3dmetal"; bad=1; }
+          [ "$bad" = 0 ] || { echo "forbidden content in tarball tree" >&2; exit 1; }
+          echo "clean"
+
+      - name: tarball (zstd -19)
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          T="out/runner-a-${VERSION}.tar.zst"
+          tar -C dist/runners -cf - "$RUNNER_ID" | zstd -19 -T0 -o "$T"
+          (cd out && shasum -a 256 "runner-a-${VERSION}.tar.zst" > "runner-a-${VERSION}.tar.zst.sha256")
+          ls -l out; cat out/*.sha256
+          # the archive must also be free of the forbidden names
+          ! zstd -dc "$T" | tar -tf - | grep -Ei 'd3dmetal|libd3dshared|tier0_s64|vstdlib_s64|steamclient(64)?\.dll|GameOverlayRenderer64|SteamService'
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: runner-a-${{ steps.ver.outputs.version }}
+          path: |
+            out/runner-a-*.tar.zst
+            out/runner-a-*.tar.zst.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: build logs on failure
+        if: failure()
+        run: tail -n 40 build/logs/*.log 2>/dev/null || true
+
+  release:
+    if: ${{ inputs.release }}
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: runner-a-${{ needs.build.outputs.version }}
+          path: out
+      - name: verify and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          cd out
+          sha256sum -c "runner-a-${VERSION}.tar.zst.sha256"
+          gh release create "runner-a-${VERSION}" "runner-a-${VERSION}.tar.zst" "runner-a-${VERSION}.tar.zst.sha256" \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "Runner A ${VERSION}" \
+            --notes "CrossOver 26.3 Wine + patches, DXMT, Mono, Gecko. No D3DMetal, no Valve DLLs. Run ${GITHUB_RUN_ID}."

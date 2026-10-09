@@ -32,3 +32,4 @@ valve/eeb10d71be.patch
 # this tree; 0002 registers dlls/lsteamclient with the build.
 local/0001-steam-ntdll-route-steamclient-64-.dll-into-builtin-l.patch
 local/0002-build-register-dlls-lsteamclient-let-makedep-see-pra.patch
+local/0003-ntdll-steamclient32-skip-import-resolution.patch

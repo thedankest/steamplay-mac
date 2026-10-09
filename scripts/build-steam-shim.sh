@@ -13,14 +13,24 @@ NP="$ROOT/notproton"
 SRC="$ROOT/build/wine-11.15-src"
 BUILD="$ROOT/build/wine-11.15-shim"
 OUT="$ROOT/build/bridge"
-WINE_COMMIT=2df1ee28039cf84776eb1421ed90bd154cebb65f
+# The release tarball has the same tree as tag wine-11.15 (commit 2df1ee28039c), checked by
+# diffing both; it is fetched instead of a clone so the input is pinned by sha256.
+WINE_URL=https://dl.winehq.org/wine/source/11.x/wine-11.15.tar.xz
+WINE_SHA=5046f36dae210b198ea69792774d4401feed975d465eca6c251c9394400ec272
+DL="$ROOT/downloads"
 
 export PATH="/opt/homebrew/opt/bison/bin:/opt/homebrew/opt/flex/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 if [ ! -d "$SRC/.git" ]; then
-    git clone --quiet --depth 1 --branch wine-11.15 https://gitlab.winehq.org/wine/wine.git "$SRC"
+    mkdir -p "$DL"
+    [ -f "$DL/wine-11.15.tar.xz" ] || { curl -fsSL -o "$DL/wine-11.15.tar.xz.part" "$WINE_URL" && mv "$DL/wine-11.15.tar.xz.part" "$DL/wine-11.15.tar.xz"; }
+    echo "$WINE_SHA  $DL/wine-11.15.tar.xz" | shasum -a 256 -c - >/dev/null
+    rm -rf "$SRC" && mkdir -p "$SRC"
+    tar -xJf "$DL/wine-11.15.tar.xz" -C "$SRC" --strip-components 1
+    # Own repository, so the git apply below resolves paths inside this tree and not the
+    # enclosing checkout.
+    git -C "$SRC" init --quiet
 fi
-[ "$(git -C "$SRC" rev-parse HEAD)" = "$WINE_COMMIT" ] || { echo "wine-11.15 is not at $WINE_COMMIT" >&2; exit 1; }
 
 if ! grep -q 'WINE_CONFIG_MAKEFILE(programs/steam.exe)' "$SRC/configure.ac"; then
     git -C "$SRC" apply "$NP/bridge/register-components.diff"

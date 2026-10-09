@@ -69,6 +69,9 @@ cmd_support() {
     install_file "$ROOT/build/helpers/pe-d3d" "$SUP/pe-d3d"
     install_file "$ROOT/build/helpers/syshud" "$SUP/syshud"
     install_file "$NP/out/notproton.dylib" "$SUP/notproton.dylib"
+    # Per-game fixes (fixes/<appid>.sh), sourced by the run script before launch.
+    mkdir -p "$SUP/fixes"
+    for f in "$ROOT"/fixes/*.sh; do [ -f "$f" ] && install_file "$f" "$SUP/fixes/${f##*/}"; done
     sed -n 's/.*NOTPROTON_VERSION[^"]*"\([^"]*\)".*/\1/p' "$NP/dylib/version.h" | head -1 > "$SUP/dylib.version"
     echo "helpers, signatures, dylib: $SUP"
 }

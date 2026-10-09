@@ -1,0 +1,81 @@
+diff --git a/dylib/feats/compat_run.sh b/dylib/feats/compat_run.sh
+index 892ee81..3e838b4 100755
+--- a/dylib/feats/compat_run.sh
++++ b/dylib/feats/compat_run.sh
+@@ -14,7 +14,7 @@ while [ "$argi" -lt "$argc" ]; do
+   arg="$1"
+   shift
+   case "$arg" in
+-    CX_GRAPHICS*=*|D3DM_*=*|DXMT_*=*|DXVK_*=*|MTL_*=*|NOTPROTON_*=*|ROSETTA_*=*|WINE*=*)
++    CX_GRAPHICS*=*|CX_FWD_COMPAT_GL_CTX=*|D3DM_*=*|DXMT_*=*|DXVK_*=*|MTL_*=*|NOTPROTON_*=*|ROSETTA_*=*|WINE*=*)
+       # shellcheck disable=SC2163 # arg is a NAME=VALUE pair, which export takes as an assignment
+       export "$arg"
+       launch_env="$launch_env $arg"
+@@ -30,7 +30,7 @@ global_env="$HOME/Library/Application Support/notproton/global.env"
+ if [ -r "$global_env" ]; then
+   while IFS= read -r line || [ -n "$line" ]; do
+     case "$line" in
+-      CX_GRAPHICS*=*|D3DM_*=*|DXMT_*=*|DXVK_*=*|MTL_*=*|NOTPROTON_*=*|ROSETTA_*=*|WINE*=*)
++      CX_GRAPHICS*=*|CX_FWD_COMPAT_GL_CTX=*|D3DM_*=*|DXMT_*=*|DXVK_*=*|MTL_*=*|NOTPROTON_*=*|ROSETTA_*=*|WINE*=*)
+         name=${line%%=*}
+         eval "isset=\${$name+x}"
+         # shellcheck disable=SC2154 # eval assigns isset on the line above
+@@ -72,7 +72,7 @@ export PATH="$CX_ROOT/bin:$PATH"
+ # so there is no binary-patched copy in the bridge to compare against, and msync is on by
+ # default because its wineserver carries the msync fixes.
+ runner_kind=crossover
+-grep -q '"kind": "selfbuilt"' "$CX_ROOT/runner.json" 2>/dev/null && runner_kind=selfbuilt
++grep -Eq '"kind"[[:space:]]*:[[:space:]]*"selfbuilt"' "$CX_ROOT/runner.json" 2>/dev/null && runner_kind=selfbuilt
+ msync_default=0
+ [ "$runner_kind" = selfbuilt ] && msync_default=1
+ 
+@@ -497,6 +497,7 @@ detect_d3d() {
+   case " $flags " in
+     *" d3d12:i "*) echo d3d12 ;;
+     *" d3d11:i "*|*" dxgi:i "*|*" d3d10:i "*) echo d3d11 ;;
++    *" d3d9:i "*|*" d3d8:i "*|*" ddraw:i "*) echo d3d9 ;;
+     *" d3d12:d "*) echo d3d12 ;;
+     *" d3d11:d "*|*" dxgi:d "*|*" d3d10:d "*) echo d3d11 ;;
+     *" d3d9:"*|*" d3d8:"*|*" ddraw:"*) echo d3d9 ;;
+@@ -564,6 +565,30 @@ fi
+ 
+ export WINEDEBUG="${WINEDEBUG:-err+all,fixme-all}"
+ trap - EXIT
++# Per-game fixes, Proton style: notproton/fixes/<appid>.sh is sourced right before launch and
++# may only use the helpers below. Each helper is idempotent; set_env names are forwarded to the
++# game explicitly. edit_file takes a path under the prefix user's profile, one * allowed.
++fix_env=""
++fix_file="$HOME/Library/Application Support/notproton/fixes/$app_id.sh"
++# shellcheck disable=SC2329 # the helpers are called from the sourced fix file
++if [ "$verb" = waitforexitandrun ] && [ -r "$fix_file" ]; then
++  set_env() { export "$1=$2"; fix_env="$fix_env $1"; echo "fix: env $1=$2" >> "$log" 2>&1 || true; }
++  set_reg() { "$WINELOADER" reg add "$1" /v "$2" /t "$3" /d "$4" /f >> "$log" 2>&1 || true; }
++  dll_override() { set_reg 'HKCU\Software\Wine\DllOverrides' "$1" REG_SZ "$2"; }
++  set_winver() { set_reg "HKCU\\Software\\Wine\\AppDefaults\\$1" Version REG_SZ "$2"; }
++  edit_file() {
++    fix_base="$WINEPREFIX/drive_c/users/steamuser"
++    fix_cr=$(printf '\r')
++    find "$fix_base" -path "$fix_base/$1" -type f 2>/dev/null | while IFS= read -r f; do
++      # "key value" or "key=value" lines; CRLF and the separator are kept
++      sed -i '' -E "s/^($2)([ =])[^$fix_cr]*/\1\2$3/" "$f" && echo "fix: $f: $2 -> $3" >> "$log" 2>&1 || true
++    done
++  }
++  echo "=== fixes: $fix_file ===" >> "$log" 2>&1 || true
++  # shellcheck disable=SC1090 # per-game file chosen at run time
++  . "$fix_file" || echo "=== fixes: $fix_file failed ===" >> "$log" 2>&1 || true
++fi
++
+ echo "launch_env=$launch_env" >> "$log" 2>&1 || true
+ echo "=== launching ($verb): $WINELOADER $* ===" >> "$log" 2>&1 || true
+ 
+@@ -833,6 +858,10 @@ for name in $(env | sed -nE 's/^(Steam[A-Za-z0-9]*|WINEDLLPATH_PREPEND|(CX_GRAPH
+   # shellcheck disable=SC2154 # eval assigns value on the line above
+   set -- --env "$name=$value" "$@"
+ done
++for name in $fix_env $(env | sed -nE 's/^(CX_FWD_COMPAT_GL_CTX)=.*/\1/p'); do
++  eval "value=\$$name"
++  set -- --env "$name=$value" "$@"
++done
+ set -- \
+   --env CX_ROOT="$CX_ROOT" \
+   --env CX_HOME="$CX_HOME" \

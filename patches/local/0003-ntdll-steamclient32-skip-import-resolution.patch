@@ -1,0 +1,44 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: steamplay-mac <steamplay-mac@localhost>
+Date: Fri, 9 Oct 2026 12:00:00 +0200
+Subject: [PATCH] ntdll: Don't resolve imports of 32-bit steamclient.dll.
+
+Valve's b1cce9c420 moved the 32-bit steamclient.dll handling into the
+is_steamclient32 branch but changed `flags |= DONT_RESOLVE_DLL_REFERENCES`
+to `flags |= LDR_DONT_RESOLVE_REFS`. build_module() tests `flags` against
+DONT_RESOLVE_DLL_REFERENCES (0x1), not LDR_DONT_RESOLVE_REFS (0x40000000),
+so the imports of the 32-bit steamclient.dll were resolved again. Its
+imports tier0_s.dll and vstdlib_s.dll are not present (only the 64-bit
+ones are, and those are redirected to ntdll), so fixup_imports() fails,
+the module never loads and 32-bit games fail SteamAPI_Init().
+
+Restore the pre-b1cce9c420 32-bit behaviour (c177a34d78/0ec337a475):
+skip import resolution; LDR_DONT_RESOLVE_REFS stays set in the modref, so
+process_attach()/MODULE_InitDLL() skip it as before. The 64-bit
+steamclient64/gameoverlayrenderer path (LDR_DONT_CALL_DLLMAIN) is
+unchanged.
+---
+ dlls/ntdll/loader.c | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
+index c4acbb0..f61c938 100644
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -2366,8 +2366,12 @@ static NTSTATUS build_module( LPCWSTR load_path, const UNICODE_STRING *nt_name,
+             DWORD protect_old;
+             HANDLE file;
+ 
++            /* 32-bit steamclient.dll is fully replaced by lsteamclient trampolines; its
++             * imports (tier0_s.dll, vstdlib_s.dll) must not be resolved and DllMain must
++             * not run. LDR_DONT_RESOLVE_REFS is a WINE_MODREF flag, the fixup below tests
++             * the LoadLibraryEx flag DONT_RESOLVE_DLL_REFERENCES. */
+             wm->ldr.Flags |= LDR_DONT_RESOLVE_REFS;
+-            flags |= LDR_DONT_RESOLVE_REFS;
++            flags |= DONT_RESOLVE_DLL_REFERENCES;
+ 
+             NtProtectVirtualMemory( NtCurrentProcess(), &addr, &size, PAGE_READWRITE, &protect_old );
+             memset( &attr, 0, sizeof(attr) );
+-- 
+2.50.0
+

@@ -6,3 +6,4 @@
 /src/
 /tests/*.exe
 .DS_Store
+/build-all.out
