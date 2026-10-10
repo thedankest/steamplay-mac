@@ -93,8 +93,21 @@ else
     [ -x "$INSTALL/$LOADER" ] || die "no loader at $INSTALL/$LOADER (run scripts/build-wine-arm64.sh)"
 fi
 [ -x "$INSTALL/$SERVER" ] || die "no $SERVER (run scripts/build-wine-arm64.sh loader)"
-[ -f "$INSTALL/lib/wine/aarch64-windows/xtajit64.dll" ] && [ -f "$INSTALL/lib/wine/aarch64-windows/xtajit.dll" ] \
-    || die "FEX DLLs missing (run scripts/build-wine-arm64.sh fex)"
+# FEX DLLs: the install tree's (Hangover, or FEX-darwin after build-fex-darwin.sh install), or
+# FEX_DLLS_DIR=<dir with xtajit64.dll + xtajit.dll> (e.g. build/fex-darwin/out/dlls) for a
+# scratch runner that leaves the install tree alone. runner.json "fex" says which.
+FEX_DLLS_DIR="${FEX_DLLS_DIR:-}"
+FEX_SRC="${FEX_DLLS_DIR:-$INSTALL/lib/wine/aarch64-windows}"
+[ -f "$FEX_SRC/xtajit64.dll" ] && [ -f "$FEX_SRC/xtajit.dll" ] \
+    || die "FEX DLLs missing in $FEX_SRC (run scripts/build-wine-arm64.sh fex, or build-fex-darwin.sh)"
+fex_desc="Hangover 11.16 DLLs (FEX 2608) + fexunixlib_darwin (0001 kr trace, 0002 TSO on every thread)"
+for fex_json in "${FEX_DLLS_DIR:+$FEX_DLLS_DIR/../fex-result.json}" "$INSTALL/lib/wine/aarch64-windows/fex-dlls.json"; do
+    [ -n "$fex_json" ] && [ -f "$fex_json" ] || continue
+    [ -n "$FEX_DLLS_DIR" ] || [ "$fex_json" = "$INSTALL/lib/wine/aarch64-windows/fex-dlls.json" ] || continue
+    grep -q '"status": "pass"' "$fex_json" || die "$fex_json is not a passing FEX-darwin audit"
+    fex_desc="FEX-darwin $(plutil -extract source_commit raw -o - "$fex_json" | cut -c1-12) (FEX-2609.1 + Darwin patches, scripts/build-fex-darwin.sh, wow64 guest window $(plutil -extract wow64_guest_window raw -o - "$fex_json")) + fexunixlib_darwin (0001 kr trace, 0002 TSO on every thread)"
+    break
+done
 [ -f "$INSTALL/$UNIX_DIR/libarm64ecfex.so" ] && [ -f "$INSTALL/$UNIX_DIR/libwow64fex.so" ] \
     || die "FEX unix helpers missing (run scripts/build-wine-arm64.sh fex)"
 lipo_check=("$INSTALL/$SERVER" "$INSTALL/$UNIX_DIR/ntdll.so")
@@ -107,6 +120,10 @@ case "$OUT" in "$ROOT/dist/runners/"?*) ;; *) die "refusing to write outside dis
 rm -rf "$OUT"
 mkdir -p "$OUT"
 cp -R "$INSTALL/" "$OUT/"
+if [ -n "$FEX_DLLS_DIR" ]; then
+    install -m 0644 "$FEX_DLLS_DIR/xtajit64.dll" "$FEX_DLLS_DIR/xtajit.dll" "$OUT/lib/wine/aarch64-windows/"
+    rm -f "$OUT/lib/wine/aarch64-windows/fex-dlls.json"
+fi
 if [ "$LOADER_SOURCE" = highball ]; then
     # No wine.app: ntdll then execs <ntdll dir>/wine, i.e. Highball's entitled loader.
     rm -rf "${OUT:?}/$UNIX_DIR/wine.app"
@@ -191,7 +208,7 @@ cat > "$OUT/runner.json" <<EOF
   "wine": "wine-${wine_version:-unknown}",
   "base": "upstream wine-11.18 + patches/runner-b/series",
   "patches": "$patches",
-  "fex": "Hangover 11.16 DLLs (FEX 2608) + fexunixlib_darwin (0001 kr trace, 0002 TSO on every thread)",
+  "fex": "$fex_desc",
   "loader": "$LOADER",
   "loader_source": "$LOADER_SOURCE",
   "server": "$SERVER",
