@@ -195,5 +195,37 @@
     "size": 53898752,
     "sha256": "e590b7d988a32d6aa4cf1d8aa3aa3d33766fdd4cf4c89c2dcc2095ecb28d066f",
     "source": "Runner A's pin; equals wine-11.18 addons.c GECKO_SHA (x86_64)."
+  },
+  "_kosmickrisp": "Runner B DX12 (HANDOFF item 8): KosmicKrisp from Mesa main ce576c29 plus fxgl/steamac ed06800b host/kosmickrisp/patches 0001-0040 (Apache-2.0), built by scripts/build-kosmickrisp.sh; packaged with vkd3d-proton and DXVK by scripts/package-runner-b-dx12.sh. Fetched 2026-10-10 with the user's OK.",
+  "mesa-kosmickrisp": {
+    "kind": "url",
+    "url": "https://gitlab.freedesktop.org/mesa/mesa/-/archive/ce576c29ed90822ea15564e1e60cb48e455881bb/mesa-ce576c29ed90822ea15564e1e60cb48e455881bb.tar.gz",
+    "file": "mesa-ce576c29ed90822ea15564e1e60cb48e455881bb.tar.gz",
+    "size": 134183640,
+    "sha256": "fe1e5808befb45e619358c6f911f3f1484c5bd693f44e8aa6d989fa3fb01c51e",
+    "source": "MESA_COMMIT of steamac host/kosmickrisp/build.sh at ed06800b. GitLab archive; single source, pinned on first fetch."
+  },
+  "kosmickrisp-patches": {
+    "kind": "url",
+    "url": "https://raw.githubusercontent.com/fxgl/steamac/ed06800b653254c8af00db3a4c3f7b3f15867be8/host/kosmickrisp/patches/",
+    "file": "kosmickrisp-patches-ed06800b.sha256",
+    "sha256": "3c9b6d1fe7bd14a01afc1ca69f3f8d638d2f47c26edfd170ea9cbe9acd2d06bb",
+    "source": "40 patch files in downloads/kosmickrisp-patches-ed06800b/; this sha pins the per-file sha256 list, which build-kosmickrisp.sh checks."
+  },
+  "vkd3d-proton": {
+    "kind": "url",
+    "url": "https://github.com/HansKristian-Work/vkd3d-proton/releases/download/v3.0.1/vkd3d-proton-3.0.1.tar.zst",
+    "file": "vkd3d-proton-3.0.1.tar.zst",
+    "size": 5163266,
+    "sha256": "3cf2315522af5e43605ef6d3c41dad91387040bf97199934f3f7ab76caaa2f0c",
+    "source": "GitHub release v3.0.1 (2026-05-06); equals the asset digest. x64/x86 PE only; runs under FEX on Runner B."
+  },
+  "dxvk": {
+    "kind": "url",
+    "url": "https://github.com/doitsujin/dxvk/releases/download/v3.1.1/dxvk-3.1.1.tar.gz",
+    "file": "dxvk-3.1.1.tar.gz",
+    "size": 18041512,
+    "sha256": "40565b4a724aadc4433fa4e010b4b23916d9b1f1baeee64e17186db94f54e608",
+    "source": "GitHub release v3.1.1 (2026-09-15); equals the asset digest (gh api, 2026-10-10). x64/x86 PE; dxgi.dll pairs with vkd3d-proton on Runner B."
   }
 }

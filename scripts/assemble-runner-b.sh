@@ -203,6 +203,11 @@ cat > "$OUT/runner.json" <<EOF
 }
 EOF
 jq . "$OUT/runner.json" >/dev/null || die "runner.json is not valid JSON"
+# DX12/Vulkan renderers (KosmicKrisp, vkd3d-proton, DXVK), only when KosmicKrisp has been built,
+# like DXMT above; the script also updates runner.json "renderers".
+if [ -f "$ROOT/build/kosmickrisp/out/lib/libvulkan_kosmickrisp.dylib" ]; then
+    "$ROOT/scripts/package-runner-b-dx12.sh" "$OUT"
+fi
 du -sh "$OUT"
 echo "runner: $OUT"
 if [ "$LOADER_SOURCE" = highball ]; then
