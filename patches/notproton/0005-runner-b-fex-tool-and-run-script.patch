@@ -1,0 +1,539 @@
+compat: Runner B (ARM64 Wine + FEX) as its own Steam tool, and a run script that serves both runners.
+
+steamplay-mac. Before this, the dylib declared one tool, "notproton", whose run script always
+used runners/current and found the loader only as wine.app or x86_64-unix/wine, so Runner B
+(Highball loader layout) could not be launched from Steam.
+
+- compat.c: a second tool, "notproton-fex" ("Steam Play (Wine, FEX)"), written next to
+  "notproton" (now shown as "Steam Play (Wine, Rosetta)") with the same run script. It is
+  declared only while runners/current-fex/runner.json exists, and withdrawn otherwise. The name
+  keeps "proton" so Steam Cloud's path mapping still applies.
+- compat_run.sh:
+  - the tool directory (resolved: Steam runs '<dir>/.'/run) picks the runner (notproton -> runners/current, notproton-fex ->
+    runners/current-fex);
+  - runner.json "loader"/"server"/"unix_dir" (relative, inside the runner) name the loader,
+    wineserver and unix dir when present; WINEDLLPATH uses aarch64-windows for them;
+  - an arm64 runner never gets D3DMetal (none exists for arm64) and gets DXMT only when
+    lib/renderers/dxmt/aarch64-unix/winemetal.so is present; otherwise wined3d, logged;
+  - Game Mode staging symlinks a loader that is itself a link (Highball's entitled loader keeps
+    its provisioning profile only when run in place; a hard link or copy loses it);
+  - an arm64 runner keeps its own lsteamclient (the bridge copy is the Rosetta runner's);
+  - switching a game between tools parks the other runner's prefix as pfx.<machine> and
+    restores this runner's, instead of refusing; it waits up to 15 s for the old wineserver;
+  - an arm64 runner gets no Steam overlay injection for now (its dylibs break Wine's
+    shared user data mapping, c0000018, and the game exits at once);
+  - an arm64 runner sets FEX_HOSTFEATURES (enablecrc/enablecrypto from sysctl FEAT_CRC32,
+    FEAT_AES+FEAT_PMULL; Wine on macOS publishes no ID registers, so FEX hid SSE4.2/AES-NI/PCLMUL),
+    forwarded to the game;
+  - on an arm64 runner the registry batch marks Steam's Jun2010 DirectX redist as run (its
+    DXSETUP never exits on a new FEX prefix and holds the evaluator); NOTPROTON_FEX_DXSETUP=1 opts
+    back in (Phase 4 phase4-fex-skip-dxsetup);
+  - on an arm64 runner an Unreal Engine bootstrap (<Name>.exe next to Engine/) is replaced by
+    <Name>/Binaries/Win64/<Name>-Win64-Shipping.exe (the bootstrap always finds the VC runtime
+    missing there and exits after its prerequisites setup);
+  - on the Vulkan route the pipeline caches go under Steam's shadercache/<appid>
+    (STEAM_COMPAT_SHADER_PATH): vkd3d-proton's pipeline library (VKD3D_SHADER_CACHE_PATH, a
+    Windows path) and Mesa's disk cache for KosmicKrisp (MESA_SHADER_CACHE_DIR). Left to itself
+    vkd3d-proton used the game's directory and wrote nothing, so every start recompiled every
+    pipeline (Librarian: about three minutes behind a black window);
+  - the syshud label says FEX or Rosetta from runner.json "flavour";
+  - the per-launch registry values go in with one reg import (Phase 4 batch-prefix-registry);
+  - Direct3D 12 on an arm64 runner: vkd3d-proton with DXVK's dxgi on KosmicKrisp, picked when
+    lib/renderers/{vkd3d-proton,dxvk}/aarch64-windows (PE files marked builtin) and
+    lib/renderers/kosmickrisp/{icd.d/kosmickrisp_icd.json,vklib/libMoltenVK.dylib} are present;
+    the DXVK choice uses KosmicKrisp too. VK_DRIVER_FILES is set and forwarded, and the launcher
+    sets DYLD_LIBRARY_PATH to vklib (winevulkan opens libMoltenVK.dylib, here the Vulkan loader).
+
+--- a/dylib/feats/compat.c
++++ b/dylib/feats/compat.c
+@@ -14,7 +14,13 @@
+ // the tool's name contains "proton" so without a match every AutoCloud rule silently
+ // skips the app.
+ #define TOOL_DIR_NAME "notproton"
+-#define TOOL_DISPLAY_NAME "Steam Play (Wine, self-built)"
++#define TOOL_DISPLAY_NAME "Steam Play (Wine, Rosetta)"
++// Runner B (ARM64 Wine + FEX, no Rosetta) is a second tool over the same run script, which
++// picks the runner by the directory it runs from. It is declared only while that runner is
++// installed, and Steam lists it from its next start.
++#define FEX_TOOL_DIR_NAME "notproton-fex"
++#define FEX_TOOL_DISPLAY_NAME "Steam Play (Wine, FEX)"
++#define FEX_RUNNER_MANIFEST "Library/Application Support/notproton/runners/current-fex/runner.json"
+ 
+ #define COMPAT_MANAGER_ENABLED_OFF  0x7B0
+ #define COMPAT_TOOL_STRIDE          0x130
+@@ -36,20 +42,23 @@
+ // Steam's compatibilitytools.d scanner registers a tool when this file is present
+ // in the tool subdirectory. install_path is "." because the manifest lives inside
+ // the tool directory. to_oslist is macos
+-static const char TOOL_DECLARATION[] =
+-    "\"compatibilitytools\"\n"
+-    "{\n"
+-    "  \"compat_tools\"\n"
+-    "  {\n"
+-    "    \"" TOOL_DIR_NAME "\"\n"
+-    "    {\n"
+-    "      \"install_path\" \".\"\n"
+-    "      \"display_name\" \"" TOOL_DISPLAY_NAME "\"\n"
+-    "      \"from_oslist\" \"windows\"\n"
+-    "      \"to_oslist\" \"macos\"\n"
+-    "    }\n"
+-    "  }\n"
+-    "}\n";
++#define TOOL_DECLARATION_OF(name, display) \
++    "\"compatibilitytools\"\n" \
++    "{\n" \
++    "  \"compat_tools\"\n" \
++    "  {\n" \
++    "    \"" name "\"\n" \
++    "    {\n" \
++    "      \"install_path\" \".\"\n" \
++    "      \"display_name\" \"" display "\"\n" \
++    "      \"from_oslist\" \"windows\"\n" \
++    "      \"to_oslist\" \"macos\"\n" \
++    "    }\n" \
++    "  }\n" \
++    "}\n"
++static const char TOOL_DECLARATION[] = TOOL_DECLARATION_OF(TOOL_DIR_NAME, TOOL_DISPLAY_NAME);
++static const char FEX_TOOL_DECLARATION[] =
++    TOOL_DECLARATION_OF(FEX_TOOL_DIR_NAME, FEX_TOOL_DISPLAY_NAME);
+ 
+ #include "compat_run.h"  // RUN_SCRIPT, generated from compat_run.sh
+ 
+@@ -290,6 +299,8 @@
+            tools_dir);
+ }
+ 
++static int write_tool(const char *tools_dir, const char *name, const char *declaration);
++
+ int np_compat_ensure_tool_manifest(void) {
+     const char *home = np_home_dir();
+     if (!home) return -1;
+@@ -303,8 +314,26 @@
+         return -1;
+     }
+ 
++    // Without its runner the FEX tool would be listed and fail every launch, so its
++    // declaration (what Steam's scan registers) goes away with the runner.
++    char path[512];
++    snprintf(path, sizeof(path), "%s/" FEX_RUNNER_MANIFEST, home);
++    if (access(path, F_OK) == 0) {
++        write_tool(tools_dir, FEX_TOOL_DIR_NAME, FEX_TOOL_DECLARATION);
++    } else {
++        snprintf(path, sizeof(path), "%s/%s/compatibilitytool.vdf", tools_dir,
++                 FEX_TOOL_DIR_NAME);
++        if (unlink(path) == 0)
++            NP_LOG("np_compat_ensure_tool_manifest: no FEX runner, withdrew %s",
++                   FEX_TOOL_DIR_NAME);
++    }
++
++    return write_tool(tools_dir, TOOL_DIR_NAME, TOOL_DECLARATION);
++}
++
++static int write_tool(const char *tools_dir, const char *name, const char *declaration) {
+     char tool_dir[512];
+-    snprintf(tool_dir, sizeof(tool_dir), "%s/%s", tools_dir, TOOL_DIR_NAME);
++    snprintf(tool_dir, sizeof(tool_dir), "%s/%s", tools_dir, name);
+ 
+     if (ensure_dir(tool_dir) != 0) {
+         NP_WARN("np_compat_ensure_tool_manifest: cannot create %s", tool_dir);
+@@ -317,7 +346,7 @@
+     // Rewritten every launch so field changes take effect. A rescan replaces it in
+     // place rather than adding a second copy.
+     snprintf(path, sizeof(path), "%s/compatibilitytool.vdf", tool_dir);
+-    if (write_file(path, TOOL_DECLARATION, 0) == 0) wrote++;
++    if (write_file(path, declaration, 0) == 0) wrote++;
+     else NP_WARN("np_compat_ensure_tool_manifest: failed to write %s", path);
+ 
+     snprintf(path, sizeof(path), "%s/toolmanifest.vdf", tool_dir);
+--- a/dylib/feats/compat_run.sh
++++ b/dylib/feats/compat_run.sh
+@@ -78,22 +78,65 @@
+     ;;
+ esac
+ 
+-CX_ROOT="$HOME/Library/Application Support/notproton/runners/current"
++# One Steam tool per runner. This script runs as compatibilitytools.d/<tool>/run, and the tool
++# picks the runner: notproton is the Rosetta runner (runners/current), notproton-fex the ARM64
++# Wine + FEX runner (runners/current-fex).
++# Steam runs it as '<tool dir>/.'/run, so the directory is resolved, not taken apart.
++np_tool=$(basename "$(cd "$(dirname "$0")" 2>/dev/null && pwd -P)")
++case "$np_tool" in
++  notproton-fex) runner_link=current-fex ;;
++  *) runner_link=current ;;
++esac
++CX_ROOT="$HOME/Library/Application Support/notproton/runners/$runner_link"
+ export CX_ROOT
+ # cxcompatdb resolves its database through CX_HOME and logs an error for
+ # every module loaded without it :(
+ export CX_HOME="$HOME/Library/Application Support/CrossOver"
+-wine_unix="$CX_ROOT/lib/wine/aarch64-unix"
+-WINELOADER="$wine_unix/wine.app/Contents/MacOS/wine"
+-WINESERVER="$CX_ROOT/bin/wineserver-arm64"
+-if [ ! -x "$WINELOADER" ] || [ ! -x "$WINESERVER" ]; then
+-  wine_unix="$CX_ROOT/lib/wine/x86_64-unix"
+-  WINELOADER="$wine_unix/wine"
+-  WINESERVER="$CX_ROOT/bin/wineserver"
+-  [ -x "$WINESERVER" ] || WINESERVER="$CX_ROOT/bin/wineserver-x86"
++# A flat "key": "value" line of runner.json.
++runner_field() {
++  sed -n "s/^[[:space:]]*\"$1\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" \
++    "$CX_ROOT/runner.json" 2>/dev/null | head -n 1
++}
++# A runner.json path: relative, and inside the runner.
++runner_path() {
++  rel=$(runner_field "$1")
++  case "/$rel/" in //|/[/]*|*/../*) return 1 ;; esac
++  printf '%s/%s' "$CX_ROOT" "$rel"
++}
++runner_flavour=$(runner_field flavour)
++pe_dir=x86_64-windows
++# Runner B names its loader, wineserver and unix directory in runner.json (its Highball layout
++# has no wine.app) and keeps its PE builtins in aarch64-windows; other runners are found by
++# their files.
++if r_loader=$(runner_path loader) && r_server=$(runner_path server) \
++  && r_unix=$(runner_path unix_dir) && [ -x "$r_loader" ] && [ -x "$r_server" ]; then
++  wine_unix=$r_unix
++  WINELOADER=$r_loader
++  WINESERVER=$r_server
++  [ "${wine_unix##*/}" = aarch64-unix ] && pe_dir=aarch64-windows
++else
++  wine_unix="$CX_ROOT/lib/wine/aarch64-unix"
++  WINELOADER="$wine_unix/wine.app/Contents/MacOS/wine"
++  WINESERVER="$CX_ROOT/bin/wineserver-arm64"
++  if [ ! -x "$WINELOADER" ] || [ ! -x "$WINESERVER" ]; then
++    wine_unix="$CX_ROOT/lib/wine/x86_64-unix"
++    WINELOADER="$wine_unix/wine"
++    WINESERVER="$CX_ROOT/bin/wineserver"
++    [ -x "$WINESERVER" ] || WINESERVER="$CX_ROOT/bin/wineserver-x86"
++  fi
+ fi
+ export WINELOADER WINESERVER
+-export WINEDLLPATH="$CX_ROOT/lib/wine/x86_64-windows:$wine_unix"
++export WINEDLLPATH="$CX_ROOT/lib/wine/$pe_dir:$wine_unix"
++# FEX reads the host's CPU features from ID registers that Wine on macOS does not publish, so it
++# assumes no CRC32 or AES and hides SSE4.2, AES-NI and PCLMUL from games (Unreal Engine 5 refuses to
++# start without SSE4.2). Name the ones this Mac has.
++if [ "$pe_dir" = aarch64-windows ] && [ -z "${FEX_HOSTFEATURES:-}" ]; then
++  fex_hf=""
++  [ "$(sysctl -n hw.optional.arm.FEAT_CRC32 2>/dev/null)" = 1 ] && fex_hf="enablecrc"
++  [ "$(sysctl -n hw.optional.arm.FEAT_AES 2>/dev/null)" = 1 ] \
++    && [ "$(sysctl -n hw.optional.arm.FEAT_PMULL 2>/dev/null)" = 1 ] && fex_hf="${fex_hf:+$fex_hf,}enablecrypto"
++  [ -n "$fex_hf" ] && export FEX_HOSTFEATURES="$fex_hf"
++fi
+ export PATH="$CX_ROOT/bin:$PATH"
+ 
+ # A self-built runner (steamplay-mac) carries runner.json; its ntdll is patched in source,
+@@ -119,7 +162,8 @@
+   echo "STEAM_COMPAT_DATA_PATH=$STEAM_COMPAT_DATA_PATH"
+   echo "STEAM_COMPAT_INSTALL_PATH=$STEAM_COMPAT_INSTALL_PATH"
+   echo "STEAM_COMPAT_APP_ID=$STEAM_COMPAT_APP_ID"
+-  echo "runner=$(readlink "$CX_ROOT" 2>/dev/null || echo "$CX_ROOT") kind=$runner_kind"
++  echo "runner=$(readlink "$CX_ROOT" 2>/dev/null || echo "$CX_ROOT") kind=$runner_kind tool=$np_tool flavour=${runner_flavour:-none}"
++  echo "loader=$WINELOADER server=$WINESERVER${FEX_HOSTFEATURES:+ FEX_HOSTFEATURES=$FEX_HOSTFEATURES}"
+   echo "-- steam env passed through --"
+   env | grep -iE '^(Steam|SDL_)' | sort
+ } >> "$log" 2>&1 || true
+@@ -169,6 +213,45 @@
+   esac
+ }
+ 
++# Both Steam tools use the game's one compatdata folder, whose pfx is where Steam Cloud maps
++# the game's saves, but an x86_64 and an aarch64 Wine cannot share a prefix. Switching tools
++# parks the other runner's prefix as pfx.<machine> and brings this runner's back (or lets
++# wineboot make one), so a game moves between runners with nothing lost or rebuilt.
++swap_prefix() {
++  parked="$STEAM_COMPAT_DATA_PATH/pfx.$have"
++  back="$STEAM_COMPAT_DATA_PATH/pfx.$want"
++  if [ -e "$parked" ] || [ -L "$parked" ] || [ -L "$WINEPREFIX" ]; then
++    echo "=== cannot park the $have prefix: pfx.$have already exists or pfx is a link ===" >> "$log" 2>&1 || true
++    return 1
++  fi
++  # Nothing may still run in the prefix being parked, and its wineserver is the other runner's,
++  # so this one cannot stop it: give a closing session the seconds its wineserver lingers.
++  ids=$(stat -f '%d-%i' "$WINEPREFIX" 2>/dev/null) || return 1
++  sdir=$(printf '/tmp/.wine-%s/server-%s' "$(id -u)" \
++    "$(printf '%s' "$ids" | awk -F- '{printf "%x-%x", $1, $2}')")
++  tries=0
++  while [ -d "$sdir" ] && lsof -t +D "$sdir" 2>/dev/null | grep -q .; do
++    tries=$((tries + 1))
++    if [ "$tries" -gt 15 ]; then
++      echo "=== the $have prefix is still in use, not parking it ===" >> "$log" 2>&1 || true
++      return 1
++    fi
++    sleep 1
++  done
++  mv "$WINEPREFIX" "$parked" 2>> "$log" || return 1
++  if [ -d "$back" ] && [ ! -L "$back" ]; then
++    if ! mv "$back" "$WINEPREFIX" 2>> "$log"; then
++      mv "$parked" "$WINEPREFIX" 2>> "$log" || true
++      return 1
++    fi
++    echo "=== parked the $have prefix as pfx.$have, restored pfx.$want ===" >> "$log" 2>&1 || true
++  else
++    mkdir -p "$WINEPREFIX"
++    echo "=== parked the $have prefix as pfx.$have, a new $want prefix follows ===" >> "$log" 2>&1 || true
++  fi
++  return 0
++}
++
+ refuse_foreign_prefix() {
+   case "${wine_unix##*/}" in
+     aarch64-unix) want=aa64 ;;
+@@ -176,6 +259,7 @@
+   esac
+   have=$(prefix_machine) || return 0
+   [ "$have" = "$want" ] && return 0
++  swap_prefix && return 0
+   echo "=== prefix ntdll is $have and this compatibility tool wants $want, rebuild the prefix in NotProton ===" >> "$log" 2>&1 || true
+ 
+   if [ "$verb" != run ]; then
+@@ -370,19 +454,29 @@
+   stage_step="profile layout"
+   lay_out_proton_profile
+   "$WINELOADER" wineboot --init >> "$log" 2>&1 || true
+-  "$WINELOADER" reg add 'HKLM\Software\Microsoft\Windows NT\CurrentVersion\AeDebug' /v Auto /t REG_SZ /d 0 /f >> "$log" 2>&1 || true
+-  "$WINELOADER" reg add 'HKLM\Software\Wow6432Node\Microsoft\Windows NT\CurrentVersion\AeDebug' /v Auto /t REG_SZ /d 0 /f >> "$log" 2>&1 || true
+-  "$WINELOADER" reg add 'HKCU\Software\Wine\WineDbg' /v ShowCrashDialog /t REG_DWORD /d 0 /f >> "$log" 2>&1 || true
+-
++  # One reg import instead of one Wine process per value (each costs about 0.26 s under Rosetta).
+   echo "video: RetinaMode=${NOTPROTON_RETINA:-0}" >> "$log" 2>&1 || true
+-  if [ "$NOTPROTON_RETINA" = "1" ]; then
+-    "$WINELOADER" reg add 'HKCU\Software\Wine\Mac Driver' /v RetinaMode /t REG_SZ /d y /f >> "$log" 2>&1 || true
+-  else
+-    "$WINELOADER" reg delete 'HKCU\Software\Wine\Mac Driver' /v RetinaMode /f >> "$log" 2>&1 || true
+-  fi
+-
+-  "$WINELOADER" reg add 'HKLM\Software\Classes\steam' /v 'URL Protocol' /t REG_SZ /d '' /f >> "$log" 2>&1 || true
+-  "$WINELOADER" reg add 'HKLM\Software\Classes\steam\shell\open\command' /ve /t REG_SZ /d '"C:\Program Files (x86)\Steam\steam.exe" "%1"' /f >> "$log" 2>&1 || true
++  np_retina=-
++  [ "$NOTPROTON_RETINA" = "1" ] && np_retina='"y"'
++  # FEX: Steam's Jun2010 DXSETUP finishes its work on a new prefix but never exits, which holds
++  # the install-script evaluator (and so the game) forever. Wine's builtin d3dx9/d3dcompiler/
++  # xaudio2 cover it, so record it as run the way Steam itself does after a successful run.
++  # autofix still installs native d3dx9 on request (NOTPROTON_AUTOFIX_REDIST=all).
++  np_dx=''
++  [ "${wine_unix##*/}" = aarch64-unix ] && [ "${NOTPROTON_FEX_DXSETUP:-0}" != 1 ] \
++    && np_dx='[HKEY_LOCAL_MACHINE\Software\Wow6432Node\Valve\Steam\Apps\CommonRedist\DirectX\Jun2010]'
++  np_reg="$WINEPREFIX/drive_c/windows/temp/notproton-prefix.reg"
++  mkdir -p "$(dirname "$np_reg")" 2>/dev/null || true
++  printf '%s\n' 'Windows Registry Editor Version 5.00' '' \
++    '[HKEY_LOCAL_MACHINE\Software\Microsoft\Windows NT\CurrentVersion\AeDebug]' '"Auto"="0"' '' \
++    '[HKEY_LOCAL_MACHINE\Software\Wow6432Node\Microsoft\Windows NT\CurrentVersion\AeDebug]' '"Auto"="0"' '' \
++    '[HKEY_CURRENT_USER\Software\Wine\WineDbg]' '"ShowCrashDialog"=dword:00000000' '' \
++    '[HKEY_CURRENT_USER\Software\Wine\Mac Driver]' "\"RetinaMode\"=$np_retina" '' \
++    '[HKEY_LOCAL_MACHINE\Software\Classes\steam]' '"URL Protocol"=""' '' \
++    '[HKEY_LOCAL_MACHINE\Software\Classes\steam\shell\open\command]' \
++    '@="\"C:\\Program Files (x86)\\Steam\\steam.exe\" \"%1\""' '' \
++    "$np_dx" "${np_dx:+\"dxsetup\"=dword:00000001}" > "$np_reg" 2>/dev/null || true
++  "$WINELOADER" reg import 'C:\windows\temp\notproton-prefix.reg' >> "$log" 2>&1 || true
+ fi
+ 
+ bridge_src="$HOME/Library/Application Support/notproton/bridge"
+@@ -404,7 +498,7 @@
+       echo "=== runner $arch ntdll is not the patched copy, set up the runner in NotProton ===" >> "$log" 2>&1 || true
+     fi
+   done
+-  for arch in i386-windows x86_64-windows "${wine_unix##*/}"; do
++  for arch in i386-windows "$pe_dir" "${wine_unix##*/}"; do
+     case "$arch" in
+       *-unix) name="lsteamclient.so" ;;
+       *) name="lsteamclient.dll" ;;
+@@ -415,6 +509,7 @@
+ }
+ install_lsteamclient_trigger() {
+   src="$bridge_src/i386-windows/lsteamclient.dll"
++  [ "$pe_dir" = aarch64-windows ] && src="$CX_ROOT/lib/wine/i386-windows/lsteamclient.dll"
+   dst="$WINEPREFIX/drive_c/windows/syswow64/lsteamclient.dll"
+   [ -f "$src" ] && [ -d "$WINEPREFIX/drive_c/windows/syswow64" ] || return 0
+   cmp -s "$src" "$dst" && return 0
+@@ -456,7 +551,10 @@
+ }
+ 
+ bridge_files="steamclient64.dll steamclient.dll tier0_s64.dll vstdlib_s64.dll"
+-bridge_files="$bridge_files lsteamclient.dll lsteamclient.so steam.exe"
++bridge_files="$bridge_files steam.exe"
++# The bridge's lsteamclient is built for the Rosetta runner; an arm64 runner carries its own
++# (ARM64X PE and arm64 .so), which a staged copy would shadow.
++[ "$pe_dir" = aarch64-windows ] || bridge_files="$bridge_files lsteamclient.dll lsteamclient.so"
+ if [ -d "$bridge_src" ] && [ -n "$WINEPREFIX" ]; then
+   stage_step="bridge staging"
+   mkdir -p "$prefix_steam"
+@@ -561,15 +659,49 @@
+ if [ "$runner_kind" = selfbuilt ]; then
+   backend="${CX_GRAPHICS_BACKEND:-auto}"
+   backend_from=launch-options
++  # An arm64 runner has no D3DMetal (Apple ships it for x86_64 only). It has DXMT once its
++  # native winemetal.so is in the runner, and Direct3D 12 through vkd3d-proton (with DXVK's dxgi,
++  # since Wine's cannot drive a vkd3d-proton queue) on KosmicKrisp, the Vulkan driver MoltenVK
++  # cannot stand in for. Those PE files are marked builtin in <renderer>/aarch64-windows and
++  # i386-windows; vklib holds libMoltenVK.dylib -> the Vulkan loader, which winevulkan opens.
++  has_d3dmetal=1
++  has_dxmt=1
++  has_vkd3d=0
++  vk_root="$CX_ROOT/lib/renderers/kosmickrisp"
++  if [ "$pe_dir" = aarch64-windows ]; then
++    has_d3dmetal=0
++    [ -f "$CX_ROOT/lib/renderers/dxmt/aarch64-unix/winemetal.so" ] || has_dxmt=0
++    if [ -f "$vk_root/icd.d/kosmickrisp_icd.json" ] && [ -e "$vk_root/vklib/libMoltenVK.dylib" ]; then
++      [ -f "$CX_ROOT/lib/renderers/vkd3d-proton/aarch64-windows/d3d12.dll" ] \
++        && [ -f "$CX_ROOT/lib/renderers/dxvk/aarch64-windows/dxgi.dll" ] && has_vkd3d=1
++    else
++      vk_root=""
++    fi
++  fi
+   if [ "$backend" = auto ]; then
+     api=$(detect_d3d "$1")
+     case "$api" in
+-      d3d12) backend=d3dmetal ;;
++      d3d12) backend=d3dmetal
++        [ "$has_d3dmetal" = 0 ] && [ "$has_vkd3d" = 1 ] && backend=vkd3d ;;
+       d3d11) backend=dxmt ;;
+       *) backend=wined3d ;;
+     esac
+     backend_from="auto ($api)"
+   fi
++  if [ "$backend" = d3dmetal ] && [ "$has_d3dmetal" = 0 ]; then
++    echo "=== no D3DMetal in this arm64 runner, using wined3d ===" >> "$log" 2>&1 || true
++    backend=wined3d
++  elif [ "$backend" = dxmt ] && [ "$has_dxmt" = 0 ]; then
++    echo "=== no DXMT in this runner, using wined3d ===" >> "$log" 2>&1 || true
++    backend=wined3d
++  elif [ "$backend" = vkd3d ] && [ "$has_vkd3d" = 0 ]; then
++    echo "=== no vkd3d-proton in this runner, using wined3d ===" >> "$log" 2>&1 || true
++    backend=wined3d
++  elif [ "$backend" = dxvk ] && [ "$pe_dir" = aarch64-windows ] && [ -z "$vk_root" ]; then
++    echo "=== no KosmicKrisp in this runner for DXVK, using wined3d ===" >> "$log" 2>&1 || true
++    backend=wined3d
++  fi
++  vk_driver=""
+   case "$backend" in
+     d3dmetal)
+       export WINEDLLPATH_PREPEND="$CX_ROOT/lib/renderers/d3dmetal"
+@@ -578,9 +710,14 @@
+     dxmt)
+       export WINEDLLPATH_PREPEND="$CX_ROOT/lib/renderers/dxmt"
+       ;;
++    vkd3d)
++      export WINEDLLPATH_PREPEND="$CX_ROOT/lib/renderers/vkd3d-proton:$CX_ROOT/lib/renderers/dxvk"
++      vk_driver="$vk_root"
++      ;;
+     dxvk)
+       if [ -d "$CX_ROOT/lib/renderers/dxvk" ]; then
+         export WINEDLLPATH_PREPEND="$CX_ROOT/lib/renderers/dxvk"
++        [ "$pe_dir" = aarch64-windows ] && vk_driver="$vk_root"
+       else
+         echo "=== no DXVK in this runner, using wined3d ===" >> "$log" 2>&1 || true
+         backend=wined3d
+@@ -588,6 +725,26 @@
+       ;;
+     *) backend=wined3d ;;
+   esac
++  # On-disk pipeline caches for the Vulkan route, kept where Proton keeps them: under Steam's
++  # shadercache/<appid> (STEAM_COMPAT_SHADER_PATH; the compat data dir when Steam gives none).
++  # vkd3d-proton's pipeline library (left to itself it uses the game's own directory and wrote
++  # nothing there; Librarian's first start froze about three minutes compiling pipelines, and
++  # would again on every start) and Mesa's disk cache for KosmicKrisp. vkd3d-proton is a PE file
++  # and reads a Windows path; Mesa is native and reads a Unix one.
++  if [ -n "$vk_driver" ]; then
++    shader_dir="${STEAM_COMPAT_SHADER_PATH:-$STEAM_COMPAT_DATA_PATH/shadercache}"
++    if mkdir -p "$shader_dir/vkd3d-proton" "$shader_dir/mesa" 2>/dev/null; then
++      win_shader_dir="Z:$(printf '%s' "$shader_dir/vkd3d-proton" | sed 's#/#\\#g')"
++      : "${VKD3D_SHADER_CACHE_PATH:=$win_shader_dir}"
++      : "${MESA_SHADER_CACHE_DIR:=$shader_dir/mesa}"
++      export VKD3D_SHADER_CACHE_PATH MESA_SHADER_CACHE_DIR
++      echo "shader cache: $shader_dir (vkd3d-proton, mesa)" >> "$log" 2>&1 || true
++    fi
++  fi
++  if [ -n "$vk_driver" ]; then
++    export VK_DRIVER_FILES="${VK_DRIVER_FILES:-$vk_driver/icd.d/kosmickrisp_icd.json}"
++    echo "vulkan: VK_DRIVER_FILES=$VK_DRIVER_FILES, loader from $vk_driver/vklib" >> "$log" 2>&1 || true
++  fi
+   export CX_ACTIVE_GRAPHICS_BACKEND="$backend"
+   echo "graphics: $backend from $backend_from" >> "$log" 2>&1 || true
+ fi
+@@ -608,8 +765,12 @@
+     rows=$(printf '%s' "$MTL_HUD_ELEMENTS" | tr ',' '\n' | grep -c .)
+     case ",$MTL_HUD_ELEMENTS," in *graph*|*histogram*) rows=$((rows + 3)) ;; esac
+     wine_label="$(sed -n 's/.*"wine": "\(.*\)".*/\1/p' "$CX_ROOT/runner.json" 2>/dev/null) ($(readlink "$CX_ROOT" 2>/dev/null || echo runner))"
++    case "$runner_flavour" in
++      fex) cpu_label=FEX ;;
++      *) cpu_label=Rosetta ;;
++    esac
+     "$syshud" --offset "${NOTPROTON_SYSHUD_OFFSET:-$((14 + rows * 14))}" \
+-      --label "Wine: $wine_label" --label "Graphics: ${backend:-${CX_ACTIVE_GRAPHICS_BACKEND:-?}} (Rosetta)" \
++      --label "Wine: $wine_label" --label "Graphics: ${backend:-${CX_ACTIVE_GRAPHICS_BACKEND:-?}} ($cpu_label)" \
+       --pid $$ --app "com.notproton.launcher.$app_id" >> "$log" 2>&1 &
+     syshud_pid=$!
+   fi
+@@ -659,6 +820,18 @@
+ if command -v autofix_argv >/dev/null 2>&1; then
+   eval "set -- $(autofix_argv "$@")"
+ fi
++# An Unreal Engine bootstrap (<install>/<Name>.exe next to Engine/) checks the Visual C++ runtime by
++# version; on an arm64 runner it always sees it missing, offers its prerequisites setup and then
++# exits without starting the game. Start <Name>-Win64-Shipping.exe directly, with the same arguments.
++if [ "$pe_dir" = aarch64-windows ] && [ "$verb" = waitforexitandrun ] && [ -n "${1:-}" ]; then
++  ue_name=$(basename "$1" .exe)
++  ue_ship="$(dirname "$1")/$ue_name/Binaries/Win64/$ue_name-Win64-Shipping.exe"
++  if [ -d "$(dirname "$1")/Engine" ] && [ -f "$ue_ship" ]; then
++    echo "=== Unreal bootstrap skipped: starting $ue_name-Win64-Shipping.exe ===" >> "$log" 2>&1 || true
++    shift
++    set -- "$ue_ship" "$@"
++  fi
++fi
+ target="$1"
+ case "$target" in
+   "$STEAM_COMPAT_INSTALL_PATH"/*) foreground=1 ;;
+@@ -820,7 +993,14 @@
+   esac
+   ln -sfn "$f" "$loader_macos/$base"
+ done
+-ln "$WINELOADER" "$loader_macos/wine" 2>/dev/null || cp "$WINELOADER" "$loader_macos/wine"
++if [ -L "$WINELOADER" ]; then
++  # A loader that is a link (Runner B's, to Highball's entitled WineLoader.app) only keeps its
++  # provisioning profile when it runs from its own bundle, which a copy or hard link loses; it
++  # finds ntdll.so next to this link, which the loop above put there.
++  ln -sfn "$WINELOADER" "$loader_macos/wine"
++else
++  ln "$WINELOADER" "$loader_macos/wine" 2>/dev/null || cp "$WINELOADER" "$loader_macos/wine"
++fi
+ if [ -x "$loader_macos/wine" ]; then
+   WINELOADER="$loader_macos/wine"
+   echo "loader staged in bundle for game mode" >> "$log" 2>&1 || true
+@@ -828,10 +1008,14 @@
+   echo "loader staging failed, game mode unavailable" >> "$log" 2>&1 || true
+ fi
+ 
++# DYLD_ variables do not survive /bin/sh, so the launcher sets the Vulkan loader's path itself.
++vk_line=""
++[ -n "$vk_driver" ] && vk_line="export DYLD_LIBRARY_PATH=\"$vk_driver/vklib\""
+ cat > "$loader_macos/launcher" <<LAUNCHER
+ #!/bin/sh
+ export WINELOADER="$WINELOADER"
+ export DYLD_FALLBACK_LIBRARY_PATH="$CX_ROOT/lib:/usr/local/lib:/usr/lib"
++$vk_line
+ wine_log="$loader_root/notproton-wine.log"
+ exec > "\$wine_log" 2>&1
+ shim="$HOME/Library/Application Support/notproton/overlay-shim.dylib"
+@@ -914,6 +1098,12 @@
+ shim_exe="C:\\Program Files (x86)\\Steam\\steam.exe"
+ 
+ game_cwd="$(pwd)"
++# On an arm64 runner the overlay's dylibs, inserted before Wine reserves low memory, leave it
++# unable to map the shared user data page (c0000018) and the game exits at once.
++if [ "$pe_dir" = aarch64-windows ] && [ -n "$STEAM_DYLD_INSERT_LIBRARIES" ]; then
++  echo "=== overlay not injected: the arm64 runner cannot load it yet ===" >> "$log" 2>&1 || true
++  STEAM_DYLD_INSERT_LIBRARIES=""
++fi
+ if [ -n "$STEAM_DYLD_INSERT_LIBRARIES" ]; then
+   echo "=== overlay injected from $STEAM_DYLD_INSERT_LIBRARIES ===" >> "$log" 2>&1 || true
+ else
+@@ -925,7 +1115,7 @@
+   # shellcheck disable=SC2154 # eval assigns value on the line above
+   set -- --env "$name=$value" "$@"
+ done
+-for name in $fix_env $(env | sed -nE 's/^(CX_FWD_COMPAT_GL_CTX)=.*/\1/p'); do
++for name in $fix_env $(env | sed -nE 's/^(CX_FWD_COMPAT_GL_CTX|VK_DRIVER_FILES|FEX_HOSTFEATURES|VKD3D_SHADER_CACHE_PATH|MESA_SHADER_CACHE_DIR)=.*/\1/p'); do
+   eval "value=\$$name"
+   set -- --env "$name=$value" "$@"
+ done

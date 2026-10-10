@@ -972,7 +972,7 @@ remove_support_files() {
         rm -f "$NP_SUPPORT/$f"
     done
     rm -rf "$NP_SUPPORT/signatures" "$NP_SUPPORT"/signatures.disabled-* "$NP_SUPPORT/tools" "$NP_SUPPORT/bridge" "$NP_SUPPORT/fixes" "$NP_SUPPORT/autofix"
-    rm -rf "$NP_TOOL_DIR"
+    rm -rf "$NP_TOOL_DIR" "$NP_TOOL_DIR-fex"
     plist="$(watch_plist)"
     if [ -f "$plist" ]; then
         watch_unload "$plist"
