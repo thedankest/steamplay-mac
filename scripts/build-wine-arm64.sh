@@ -323,8 +323,10 @@ stage_fex() {
     patch -d "$work" -p1 -s --no-backup-if-mismatch < "$tso"
     # FEX's DLLs load their unix helper by name from the ntdll.so directory and fall back to raw
     # Linux syscalls without it, which macOS answers with SIGKILL.
+    # Install name @rpath/<name>.so like Wine's own unix libraries; the default would be the
+    # build-machine output path (CI's forbidden-content check rejects that).
     for n in libarm64ecfex libwow64fex; do
-        "${FEX_CXX[@]}" -o "$UNIX/$n.so" "$work/fexunixlib_darwin.cpp"
+        "${FEX_CXX[@]}" -Wl,-install_name,"@rpath/$n.so" -o "$UNIX/$n.so" "$work/fexunixlib_darwin.cpp"
         codesign -f -s - "$UNIX/$n.so"
     done
     # Under Wine's default emulator names, so no per-prefix registry key is needed.
