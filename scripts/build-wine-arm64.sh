@@ -302,7 +302,10 @@ stage_make() {
     make -C "$OBJ" install-lib
     local f
     while IFS= read -r f; do strip_build_rpath "$f"; done < <(find "$INSTALL" -type f \( -name '*.so' -o -path '*/bin/*' -o -name wine \))
-    if find "$INSTALL" -type f \( -name '*.so' -o -path '*/bin/*' \) -exec otool -l {} + 2>/dev/null | grep -q "$ROOT/build"; then
+    # Only load-command paths (LC_RPATH path, dylib name) count: otool -l also prints each file's
+    # own path as a header, which is always under $ROOT/build.
+    if find "$INSTALL" -type f \( -name '*.so' -o -path '*/bin/*' \) -exec otool -l {} + 2>/dev/null \
+        | grep -E '^ +(path|name) ' | grep "$ROOT/build" >&2; then
         die "build-machine paths left in installed load commands"
     fi
 }
