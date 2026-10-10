@@ -22,3 +22,9 @@ runner-b/0021-winemac-export-macdrv-functions-for-dxmt.patch
 # lsteamclient sources with scripts/fetch-steam-sources.sh --into after the series.
 runner-b/0022-steam-ntdll-route-steamclient-into-lsteamclient.patch
 runner-b/0023-build-register-dlls-lsteamclient.patch
+#
+# Ours (FEX from source): publish the ARM64 ID registers on macOS, synthesised from the
+# hw.optional.arm.FEAT_* sysctls, so FEX's Windows modules see the host's CPU features (LSE,
+# LSE2, FlagM, AFP, RPRES, FRINTTS, CRC32, crypto) instead of an ARMv8.0 baseline, and games
+# see SSE4.2 and AES-NI without FEX_HOSTFEATURES.
+runner-b/0025-ntdll-darwin-arm64-id-registers.patch

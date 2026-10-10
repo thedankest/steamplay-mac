@@ -68,6 +68,12 @@
     "sha256": "6ce3f01b600eebf271f3d176ca4c1ef9f5efa2126af9a939e7419c24d5e9a2cb",
     "source": "Ours (B3): port of patches/local/0002 to wine-11.18 (configure registration only; 11.18 makedep parses .cpp)."
   },
+  "runner-b-0025": {
+    "kind": "repo",
+    "path": "patches/runner-b/0025-ntdll-darwin-arm64-id-registers.patch",
+    "sha256": "1bfb351f86cffb53b6b6fef5b457fbceae1757063ebec0177304197bd51c187a",
+    "source": "Ours (FEX from source): macOS get_core_id_regs_arm64 in dlls/ntdll/unix/system.c synthesises MIDR, ID_AA64{PFR0,PFR1,ZFR0,ISAR0,ISAR1,ISAR2,MMFR0,MMFR1,MMFR2}_EL1 and CTR_EL0 from hw.optional.arm.FEAT_* and hw.cachelinesize, so wineboot publishes the CP xxxx values FEX reads (user mode cannot read the registers on macOS). LGPL-2.1-or-later like the file it changes."
+  },
   "fexunixlib-darwin": {
     "kind": "repo",
     "path": "runner-b/fex/fexunixlib_darwin.cpp",
@@ -227,5 +233,76 @@
     "size": 18041512,
     "sha256": "40565b4a724aadc4433fa4e010b4b23916d9b1f1baeee64e17186db94f54e608",
     "source": "GitHub release v3.1.1 (2026-09-15); equals the asset digest (gh api, 2026-10-10). x64/x86 PE; dxgi.dll pairs with vkd3d-proton on Runner B."
+  },
+  "_fex-darwin": "FEX from source (HANDOFF section 5 item 12), read by scripts/build-fex-darwin.sh. dbc-hbin/FEX-darwin (branch darwin, FEX-2609.1 + Darwin patches, MIT) pinned at fbd54488 (2026-10-08) plus the six submodules its Darwin/build.py needs (SUBMODULES there). vixl, zydis, jemalloc_glibc, Catch2, tracy, Vulkan-Headers, drm-headers and the three test-binary repos are not used by a MinGW build without tests (CMakeLists.txt at fbd54488: vixl only with BUILD_TESTING/VIXL options, zydis only with ENABLE_ZYDIS, jemalloc_glibc off for MINGW). GitHub tarballs carry no published digest: the sha256s were taken by `build-fex-darwin.sh pin` (2026-10-10) after every file of each tarball matched its commit's git tree and the six gitlinks in FEX-darwin's tree matched the pinned submodule commits (gh api), as rule 4 asks. Total 6,340,269 bytes.",
+  "fex-darwin": {
+    "kind": "url",
+    "url": "https://codeload.github.com/dbc-hbin/FEX-darwin/tar.gz/fbd54488ac27439e5dcceaeb7e0a61100332b6ad",
+    "file": "FEX-darwin-fbd54488ac27439e5dcceaeb7e0a61100332b6ad.tar.gz",
+    "size": 2852388,
+    "sha256": "b5bfe17bcf0fdcb57d42e8072ab4f433d098cf6f5d180e7798eb1d56ead31e6a",
+    "commit": "fbd54488ac27439e5dcceaeb7e0a61100332b6ad",
+    "subdir": "FEX-darwin-fbd54488ac27439e5dcceaeb7e0a61100332b6ad",
+    "source": "github.com/dbc-hbin/FEX-darwin branch darwin, commit of 2026-10-08 (\"Darwin: Keep regression fixtures and working notes local\"). MIT (LICENSE; LICENSE.upstream keeps FEX's MIT notice). Baseline FEX-Emu/FEX tag FEX-2609.1 (9fbdc00b) + 6 Darwin patches + 3 upstream backports, listed with sha256s in Darwin/provenance.json. 3,598 files, 21,829,285 bytes uncompressed (gh api git tree, 2026-10-10)."
+  },
+  "fex-fmt": {
+    "kind": "url",
+    "url": "https://codeload.github.com/fmtlib/fmt/tar.gz/c07e2aa4b130b4fd359a1c6455a5201b17af01fa",
+    "file": "fmt-c07e2aa4b130b4fd359a1c6455a5201b17af01fa.tar.gz",
+    "size": 750766,
+    "sha256": "e0099a9035521b29523915fae2e5f1b38229df896191e4a046f7b0d55a45c7d2",
+    "commit": "c07e2aa4b130b4fd359a1c6455a5201b17af01fa",
+    "subdir": "fmt-c07e2aa4b130b4fd359a1c6455a5201b17af01fa",
+    "source": "FEX-darwin submodule External/fmt (gitlink at fbd54488). MIT. 145 files, 3,140,256 bytes (gh api)."
+  },
+  "fex-range-v3": {
+    "kind": "url",
+    "url": "https://codeload.github.com/ericniebler/range-v3/tar.gz/ca1388fb9da8e69314dda222dc7b139ca84e092f",
+    "file": "range-v3-ca1388fb9da8e69314dda222dc7b139ca84e092f.tar.gz",
+    "size": 585661,
+    "sha256": "57a6fca5d60a85b84e8efecc62f0ca064e6b1f89b97b513284fe7f5bd43d49eb",
+    "commit": "ca1388fb9da8e69314dda222dc7b139ca84e092f",
+    "subdir": "range-v3-ca1388fb9da8e69314dda222dc7b139ca84e092f",
+    "source": "FEX-darwin submodule External/range-v3 (gitlink at fbd54488). BSL-1.0 (and bundled notices, per Darwin/build.py). 672 files, 4,015,910 bytes (gh api)."
+  },
+  "fex-rpmalloc": {
+    "kind": "url",
+    "url": "https://codeload.github.com/FEX-Emu/rpmalloc/tar.gz/09142d726429416bfa7b459151515fe3ab7622dd",
+    "file": "rpmalloc-09142d726429416bfa7b459151515fe3ab7622dd.tar.gz",
+    "size": 76394,
+    "sha256": "3250fcc53532ed6161642b77f6179c7ba73173fb2130314aa7f019a574266ff6",
+    "commit": "09142d726429416bfa7b459151515fe3ab7622dd",
+    "subdir": "rpmalloc-09142d726429416bfa7b459151515fe3ab7622dd",
+    "source": "FEX-darwin submodule External/rpmalloc (gitlink at fbd54488). Permissive no-attribution grant (per Darwin/build.py). 39 files, 375,309 bytes (gh api)."
+  },
+  "fex-unordered-dense": {
+    "kind": "url",
+    "url": "https://codeload.github.com/martinus/unordered_dense/tar.gz/3234af2c03549bc85656bfd3a86993bf1cd8aef1",
+    "file": "unordered_dense-3234af2c03549bc85656bfd3a86993bf1cd8aef1.tar.gz",
+    "size": 914070,
+    "sha256": "aa68d77ef88475db710bf647017f5ccb13ceec6f55f3defa37e995b043eb990b",
+    "commit": "3234af2c03549bc85656bfd3a86993bf1cd8aef1",
+    "subdir": "unordered_dense-3234af2c03549bc85656bfd3a86993bf1cd8aef1",
+    "source": "FEX-darwin submodule External/unordered_dense (gitlink at fbd54488). MIT. 2,393 files, 4,082,537 bytes (gh api)."
+  },
+  "fex-xxhash": {
+    "kind": "url",
+    "url": "https://codeload.github.com/Cyan4973/xxHash/tar.gz/e626a72bc2321cd320e953a0ccf1584cad60f363",
+    "file": "xxHash-e626a72bc2321cd320e953a0ccf1584cad60f363.tar.gz",
+    "size": 1147772,
+    "sha256": "34e71c085636fbc1726482996d92719d0a16e6a6097970ecf2990a27b3821162",
+    "commit": "e626a72bc2321cd320e953a0ccf1584cad60f363",
+    "subdir": "xxHash-e626a72bc2321cd320e953a0ccf1584cad60f363",
+    "source": "FEX-darwin submodule External/xxhash (gitlink at fbd54488). BSD-2-Clause. 87 files, 5,440,024 bytes (gh api)."
+  },
+  "fex-cpp-optparse": {
+    "kind": "url",
+    "url": "https://codeload.github.com/Sonicadvance1/cpp-optparse/tar.gz/9f94388a339fcbb0bc95c17768eb786c85988f6e",
+    "file": "cpp-optparse-9f94388a339fcbb0bc95c17768eb786c85988f6e.tar.gz",
+    "size": 13218,
+    "sha256": "68e6b500890270517d226abbc3610135de1600ddde29f44c9b68cca5e2a17f60",
+    "commit": "9f94388a339fcbb0bc95c17768eb786c85988f6e",
+    "subdir": "cpp-optparse-9f94388a339fcbb0bc95c17768eb786c85988f6e",
+    "source": "FEX-darwin submodule Source/Common/cpp-optparse (gitlink at fbd54488). MIT. 11 files, 50,400 bytes (gh api)."
   }
 }

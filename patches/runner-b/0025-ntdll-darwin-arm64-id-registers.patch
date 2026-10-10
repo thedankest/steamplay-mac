@@ -1,0 +1,188 @@
+From: steamplay-mac <steamplay-mac@localhost>
+Date: Sat, 10 Oct 2026 12:20:00 +0200
+Subject: [PATCH] ntdll: publish the ARM64 ID registers on macOS (wine-11.18)
+
+get_core_id_regs_arm64() is a stub outside Linux, so on macOS wineboot writes no "CP xxxx"
+values under HKLM\HARDWARE\DESCRIPTION\System\CentralProcessor\<n>. FEX's Windows modules
+(xtajit64.dll, xtajit.dll; Source/Windows/Common/CPUFeatures.cpp) read exactly those values
+to learn the host CPU's features, and without them they assume an ARMv8.0 core: no LSE
+atomics, no LSE2, FlagM, AFP, RPRES, FRINTTS, CRC32 or crypto, and the x86 CPUID they report
+loses SSE4.2 (derived from CRC32) and AES/PCLMULQDQ (derived from the crypto extensions).
+Librarian (UE5) refused to start on Runner B over the missing SSE4.2 (STATUS.md 2026-10-10
+03:05); FEX_HOSTFEATURES=enablecrc,enablecrypto in the run script covered only those two.
+
+macOS traps every ID register read from user mode (MIDR_EL1, the ID_AA64*_EL1 registers and
+CTR_EL0 raise SIGILL; only DCZID_EL0, CNTFRQ_EL0 and TPIDRRO_EL0 are readable, probed on
+macOS 27.0), so the registers are synthesised from the hw.optional.arm.FEAT_* sysctls:
+MIDR_EL1 (cpu_id), ID_AA64PFR0/PFR1/ZFR0, ID_AA64ISAR0/ISAR1/ISAR2, ID_AA64MMFR0/MMFR1/MMFR2
+and CTR_EL0, the same set FEX reads. Only fields a sysctl answers are set; the rest stay 0,
+apart from fixed facts about Apple silicon (AArch64-only EL0-EL2, 16 KB pages supported and
+64 KB not, DminLine from hw.cachelinesize). Linux is unchanged.
+
+--- a/dlls/ntdll/unix/system.c
++++ b/dlls/ntdll/unix/system.c
+@@ -2099,6 +2099,164 @@
+ #undef READ_ID_REG
+ #undef STR
+     return regidx;
++}
++
++#elif defined(__APPLE__)
++
++/* steamplay-mac 0025: ID registers on macOS.
++ *
++ * The kernel traps every ID register read from user mode: MIDR_EL1, the ID_AA64*_EL1 registers
++ * and CTR_EL0 raise SIGILL (only DCZID_EL0, CNTFRQ_EL0 and TPIDRRO_EL0 can be read). The
++ * registers are therefore put together from the hw.optional.arm.FEAT_* sysctls the kernel
++ * publishes. wineboot writes them as the "CP xxxx" values under
++ * HKLM\HARDWARE\DESCRIPTION\System\CentralProcessor\<n>, which is where an ARM64EC or WoW64
++ * emulator learns about LSE atomics, LSE2, FlagM, AFP, RPRES, FRINTTS, CRC32 and the crypto
++ * extensions. Without them FEX (Source/Windows/Common/CPUFeatures.cpp) assumes an ARMv8.0 core:
++ * no LSE, and the x86 CPUID it reports loses SSE4.2 (derived from CRC32) and AES/PCLMULQDQ
++ * (derived from the crypto extensions).
++ *
++ * Only fields a sysctl answers are set; the others stay 0 ("not implemented"), apart from a
++ * few fixed facts about Apple silicon: AArch64-only EL0-EL2 (PFR0), 16 KB pages supported and
++ * 64 KB not (MMFR0; macOS runs on 16 KB pages), and MIDR = cpu_id (implementer Apple, part 0:
++ * the kernel does not publish part numbers). The values are the same on every core. */
++
++static UINT64 apple_arm_feature( const char *name )
++{
++    char key[64];
++    int val = 0;
++    size_t size = sizeof(val);
++
++    snprintf( key, sizeof(key), "hw.optional.arm.FEAT_%s", name );
++    if (sysctlbyname( key, &val, &size, NULL, 0 )) return 0;
++    return val != 0;
++}
++
++#define FEAT(name) apple_arm_feature( #name )
++#define FIELD(reg, shift, value) ((reg) |= (UINT64)(value) << (shift))
++
++static struct smbios_wine_id_reg_value_arm64 apple_id_regs[11];
++static DWORD apple_id_regs_count;
++
++static void init_apple_id_regs(void)
++{
++    UINT64 pfr0 = 0, pfr1 = 0, isar0 = 0, isar1 = 0, isar2 = 0, mmfr0 = 0, mmfr1 = 0, mmfr2 = 0, ctr, pac;
++    unsigned int line = 0, dminline = 0;
++    size_t size = sizeof(line);
++    DWORD i, n = 0;
++
++    /* ID_AA64PFR0_EL1 */
++    FIELD( pfr0, 0, 1 );                                   /* EL0: AArch64 only */
++    FIELD( pfr0, 4, 1 );                                   /* EL1 */
++    FIELD( pfr0, 8, 1 );                                   /* EL2 */
++    FIELD( pfr0, 16, FEAT(FP16) );                         /* FP: 1 = with half precision */
++    FIELD( pfr0, 20, FEAT(FP16) );                         /* AdvSIMD: 1 = with half precision */
++    FIELD( pfr0, 48, FEAT(DIT) );
++    FIELD( pfr0, 56, FEAT(CSV2) );
++    FIELD( pfr0, 60, FEAT(CSV3) );
++
++    /* ID_AA64PFR1_EL1 */
++    FIELD( pfr1, 0, FEAT(BTI) );
++    FIELD( pfr1, 4, FEAT(SSBS) );
++    FIELD( pfr1, 8, FEAT(MTE3) ? 3 : FEAT(MTE2) ? 2 : FEAT(MTE) );
++    FIELD( pfr1, 24, FEAT(SME2) ? 2 : FEAT(SME) );
++
++    /* ID_AA64ISAR0_EL1 */
++    FIELD( isar0, 4, FEAT(PMULL) ? 2 : FEAT(AES) );
++    FIELD( isar0, 8, FEAT(SHA1) );
++    FIELD( isar0, 12, FEAT(SHA512) ? 2 : FEAT(SHA256) );
++    FIELD( isar0, 16, FEAT(CRC32) );
++    FIELD( isar0, 20, FEAT(LSE128) ? 3 : FEAT(LSE) ? 2 : 0 );
++    FIELD( isar0, 28, FEAT(RDM) );
++    FIELD( isar0, 32, FEAT(SHA3) );
++    FIELD( isar0, 36, FEAT(SM3) );
++    FIELD( isar0, 40, FEAT(SM4) );
++    FIELD( isar0, 44, FEAT(DotProd) );
++    FIELD( isar0, 48, FEAT(FHM) );
++    FIELD( isar0, 52, FEAT(FlagM2) ? 2 : FEAT(FlagM) );
++    FIELD( isar0, 60, FEAT(RNG) );
++
++    /* ID_AA64ISAR1_EL1; pointer authentication goes into API/GPI (an IMPLEMENTATION DEFINED
++     * algorithm, FEAT_PACIMP) or APA/GPA (QARMA5) */
++    pac = FEAT(PAuth_LR) ? 6 : FEAT(FPACCOMBINE) ? 5 : FEAT(FPAC) ? 4 : FEAT(PAuth2) ? 3 : FEAT(EPAC) ? 2 : FEAT(PAuth);
++    FIELD( isar1, 0, FEAT(DPB2) ? 2 : FEAT(DPB) );
++    FIELD( isar1, FEAT(PACIMP) ? 8 : 4, pac );
++    FIELD( isar1, FEAT(PACIMP) ? 28 : 24, pac ? 1 : 0 );
++    FIELD( isar1, 12, FEAT(JSCVT) );
++    FIELD( isar1, 16, FEAT(FCMA) );
++    FIELD( isar1, 20, FEAT(LRCPC3) ? 3 : FEAT(LRCPC2) ? 2 : FEAT(LRCPC) );
++    FIELD( isar1, 32, FEAT(FRINTTS) );
++    FIELD( isar1, 36, FEAT(SB) );
++    FIELD( isar1, 40, FEAT(SPECRES2) ? 2 : FEAT(SPECRES) );
++    FIELD( isar1, 44, FEAT(EBF16) ? 2 : FEAT(BF16) );
++    FIELD( isar1, 48, FEAT(DGH) );
++    FIELD( isar1, 52, FEAT(I8MM) );
++    FIELD( isar1, 56, FEAT(XS) );
++    FIELD( isar1, 60, FEAT(LS64_ACCDATA) ? 3 : FEAT(LS64_V) ? 2 : FEAT(LS64) );
++
++    /* ID_AA64ISAR2_EL1 */
++    FIELD( isar2, 0, FEAT(WFxT) ? 2 : 0 );
++    FIELD( isar2, 4, FEAT(RPRES) );
++    FIELD( isar2, 16, FEAT(MOPS) );
++    FIELD( isar2, 20, FEAT(HBC) );
++    FIELD( isar2, 28, FEAT(CLRBHB) );
++    FIELD( isar2, 32, FEAT(SYSREG128) );
++    FIELD( isar2, 36, FEAT(SYSINSTR128) );
++    FIELD( isar2, 40, FEAT(PRFMSLC) );
++    FIELD( isar2, 48, FEAT(RPRFM) );
++    FIELD( isar2, 52, FEAT(CSSC) );
++    FIELD( isar2, 56, FEAT(LUT) );
++
++    /* ID_AA64MMFR0_EL1. ECV: the self-synchronising counter views (CNTVCTSS_EL0, CNTPCTSS_EL0)
++     * are readable from user mode here; FEX uses them only from ECV level 2, whose other
++     * addition (CNTPOFF_EL2) is invisible to a user process. */
++    FIELD( mmfr0, 0, 2 );                                  /* PARange: 40 bits, a lower bound */
++    FIELD( mmfr0, 20, 1 );                                 /* TGran16: supported */
++    FIELD( mmfr0, 24, 0xf );                               /* TGran64: not supported */
++    FIELD( mmfr0, 60, FEAT(ECV) ? 2 : 0 );
++
++    /* ID_AA64MMFR1_EL1 */
++    FIELD( mmfr1, 44, FEAT(AFP) );
++
++    /* ID_AA64MMFR2_EL1 */
++    FIELD( mmfr2, 32, FEAT(LSE2) );
++
++    /* CTR_EL0: DminLine from hw.cachelinesize (128 bytes on M-series). IminLine, ERG and CWG
++     * are not published: IminLine is the 64-byte minimum (a smaller stride is always safe for
++     * cache maintenance by address) and ERG/CWG stay 0 ("not provided"). */
++    if (sysctlbyname( "hw.cachelinesize", &line, &size, NULL, 0 ) || line < 16) line = 64;
++    while ((4u << dminline) < line) dminline++;
++    ctr = (UINT64)1 << 31;                                 /* RES1 */
++    FIELD( ctr, 0, 4 );                                    /* IminLine: 16 words */
++    FIELD( ctr, 14, 3 );                                   /* L1Ip: PIPT */
++    FIELD( ctr, 16, dminline );
++
++    apple_id_regs[n++] = (struct smbios_wine_id_reg_value_arm64){ 0x4000, cpu_id }; /* MIDR_EL1 */
++    apple_id_regs[n++] = (struct smbios_wine_id_reg_value_arm64){ 0x4020, pfr0 };   /* ID_AA64PFR0_EL1 */
++    apple_id_regs[n++] = (struct smbios_wine_id_reg_value_arm64){ 0x4021, pfr1 };   /* ID_AA64PFR1_EL1 */
++    apple_id_regs[n++] = (struct smbios_wine_id_reg_value_arm64){ 0x4024, 0 };      /* ID_AA64ZFR0_EL1: no SVE */
++    apple_id_regs[n++] = (struct smbios_wine_id_reg_value_arm64){ 0x4030, isar0 };  /* ID_AA64ISAR0_EL1 */
++    apple_id_regs[n++] = (struct smbios_wine_id_reg_value_arm64){ 0x4031, isar1 };  /* ID_AA64ISAR1_EL1 */
++    apple_id_regs[n++] = (struct smbios_wine_id_reg_value_arm64){ 0x4032, isar2 };  /* ID_AA64ISAR2_EL1 */
++    apple_id_regs[n++] = (struct smbios_wine_id_reg_value_arm64){ 0x4038, mmfr0 };  /* ID_AA64MMFR0_EL1 */
++    apple_id_regs[n++] = (struct smbios_wine_id_reg_value_arm64){ 0x4039, mmfr1 };  /* ID_AA64MMFR1_EL1 */
++    apple_id_regs[n++] = (struct smbios_wine_id_reg_value_arm64){ 0x403a, mmfr2 };  /* ID_AA64MMFR2_EL1 */
++    apple_id_regs[n++] = (struct smbios_wine_id_reg_value_arm64){ 0x5801, ctr };    /* CTR_EL0 */
++    apple_id_regs_count = n;
++    for (i = 0; i < n; i++)
++        TRACE( "CP %04x = %016llx\n", apple_id_regs[i].reg, (unsigned long long)apple_id_regs[i].value );
++}
++
++#undef FEAT
++#undef FIELD
++
++static DWORD get_core_id_regs_arm64( struct smbios_wine_id_reg_value_arm64 *regs,
++                                     WORD logical_thread_id )
++{
++    static pthread_once_t once = PTHREAD_ONCE_INIT;
++
++    pthread_once( &once, init_apple_id_regs );
++    memcpy( regs, apple_id_regs, apple_id_regs_count * sizeof(*regs) );
++    return apple_id_regs_count;
+ }
+ 
+ #else

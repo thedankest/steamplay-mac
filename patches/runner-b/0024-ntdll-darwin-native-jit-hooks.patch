@@ -1,0 +1,373 @@
+From: steamplay-mac <steamplay-mac@localhost>
+Date: Fri, 10 Oct 2026 02:30:00 +0200
+Subject: [PATCH] ntdll: native JIT memory hooks for FEX-darwin on arm64 macOS (wine-11.18)
+
+Two optional ntdll exports that dbc-hbin/FEX-darwin (fbd54488) looks up with GetProcAddress
+(research/FEX-DARWIN.md):
+
+* __wine_jit_write_protect(mode): per-thread write (0) / execute (1) mode of MAP_JIT memory via
+  pthread_jit_write_protect_np(); mode 2 queries the mode and switches the process to native
+  JIT memory. The previous mode is kept in struct thread_data (macOS has no getter). FEX wraps
+  every JIT write in a scope built on this.
+* __wine_allocate_native_jit(base, size): committed rwx MAP_JIT memory, registered as a view
+  with the new VPROT_NATIVEJIT flag (WoW64 module). After mode 2, NtAllocateVirtualMemoryEx
+  requests for rwx + MEM_EXTENDED_PARAMETER_EC_CODE (the ARM64EC module's code buffers) get
+  the same memory.
+
+What the kernel allows (probed on macOS 27.0): no rwx pages without MAP_JIT; MAP_JIT refuses
+MAP_FIXED (hence a kernel-chosen address, then create_view) and refuses mprotect() entirely
+(hence mprotect_range() skips these views, NtProtectVirtualMemory only updates the page
+bookkeeping, FEX's guard page is not enforced, and MEM_DECOMMIT is madvise(MADV_FREE_REUSABLE)
+instead of a PROT_NONE remap). Signal handlers start in execute mode and the pre-signal mode
+is back after they return unless they switch to writable, so Wine's handlers need no change.
+
+Without a module calling mode 2 nothing changes: the Hangover FEX DLLs keep Highball 0019's
+read-write/read-execute page flipping. Non-Apple or non-arm64 hosts answer ~0u and
+STATUS_NOT_SUPPORTED.
+
+--- a/dlls/ntdll/unix/unix_private.h
++++ b/dlls/ntdll/unix/unix_private.h
+@@ -119,6 +119,7 @@
+     int          alert_fd;          /* inproc sync fd for user apc alerts */
+     DWORD        tid;               /* thread id */
+     BOOL         allow_writes;      /* ThreadAllowWrites flags */
++    BOOL         jit_writable;      /* native JIT memory writable on this thread (steamplay-mac 0024) */
+     BOOL         suspend;           /* suspend on startup */
+     BOOL         filesys_redir;     /* WOW64_TLS_FILESYSREDIR before the TEB is created */
+     pthread_t    pthread_id;        /* pthread thread id */
+@@ -409,6 +410,8 @@
+ extern NTSTATUS unixcall_wine_server_fd_to_handle( void *args );
+ extern NTSTATUS unixcall_wine_server_handle_to_fd( void *args );
+ extern NTSTATUS unixcall_wine_spawnvp( void *args );
++extern NTSTATUS unixcall_jit_write_protect( void *args );
++extern NTSTATUS unixcall_allocate_native_jit( void *args );
+ #ifdef _WIN64
+ extern NTSTATUS wow64_wine_dbg_write( void *args );
+ extern NTSTATUS wow64_wine_server_call( void *args );
+--- a/dlls/ntdll/unixlib.h
++++ b/dlls/ntdll/unixlib.h
+@@ -72,6 +72,19 @@
+     HMODULE tgt_mod;
+ };
+ 
++/* steamplay-mac 0024: FEX-darwin native JIT hooks */
++struct jit_write_protect_params
++{
++    ULONG mode;   /* 0 = writable, 1 = executable, 2 = query (and enable native JIT memory) */
++    ULONG ret;    /* previous mode, or ~0u when the host has no per-thread JIT write protection */
++};
++
++struct allocate_native_jit_params
++{
++    void   **base;
++    SIZE_T  *size;
++};
++
+ enum ntdll_unix_funcs
+ {
+     unix_load_so_dll,
+@@ -83,6 +96,8 @@
+     unix_wine_spawnvp,
+     unix_system_time_precise,
+     unix_steamclient_setup_trampolines,
++    unix_jit_write_protect,
++    unix_allocate_native_jit,
+ };
+ 
+ extern unixlib_handle_t __wine_unixlib_handle;
+--- a/dlls/ntdll/unix/loader.c
++++ b/dlls/ntdll/unix/loader.c
+@@ -1136,6 +1136,8 @@
+     unixcall_wine_spawnvp,
+     system_time_precise,
+     steamclient_setup_trampolines,
++    unixcall_jit_write_protect,
++    unixcall_allocate_native_jit,
+ };
+ 
+ 
+@@ -1143,6 +1145,8 @@
+ 
+ static NTSTATUS wow64_load_so_dll( void *args ) { return STATUS_INVALID_IMAGE_FORMAT; }
+ static NTSTATUS wow64_unwind_builtin_dll( void *args ) { return STATUS_UNSUCCESSFUL; }
++
++static NTSTATUS wow64_allocate_native_jit( void *args ) { return STATUS_NOT_SUPPORTED; }
+ 
+ static NTSTATUS wow64_steamclient_setup_trampolines( void *args )
+ {
+@@ -1168,6 +1172,8 @@
+     wow64_wine_spawnvp,
+     system_time_precise,
+     wow64_steamclient_setup_trampolines,
++    unixcall_jit_write_protect,
++    wow64_allocate_native_jit,
+ };
+ 
+ #endif  /* _WIN64 */
+--- a/dlls/ntdll/unix/virtual.c
++++ b/dlls/ntdll/unix/virtual.c
+@@ -143,7 +143,25 @@
+ #define VPROT_SYSTEM           0x0200  /* system view (underlying mmap not under our control) */
+ #define VPROT_PLACEHOLDER      0x0400
+ #define VPROT_FREE_PLACEHOLDER 0x0800
++
++#if defined(__APPLE__) && defined(__aarch64__)
++/* steamplay-mac 0024 (FEX-darwin hooks): native JIT memory for an emulator's code buffers.
++ * arm64 macOS has no read-write-execute pages except MAP_JIT ones, where every thread picks
++ * writing or executing with pthread_jit_write_protect_np(). The kernel refuses MAP_FIXED and
++ * mprotect() on MAP_JIT memory, so such a view keeps its host protection for life: only the
++ * page bookkeeping follows NtProtectVirtualMemory, and decommit is an madvise(). Nothing here
++ * runs until a module has called __wine_jit_write_protect( 2 ) or __wine_allocate_native_jit();
++ * the Hangover FEX DLLs never do, so they keep the HB_JIT page flipping below. */
++#define NATIVE_JIT 1
++#define VPROT_NATIVEJIT        0x1000  /* MAP_JIT view: host protection fixed at rwx */
++static BOOL native_jit_enabled;
+ 
++static inline BOOL is_native_jit_view( const struct file_view *view )
++{
++    return view && (view->protect & VPROT_NATIVEJIT);
++}
++#endif
++
+ 
+ /* Conversion from VPROT_* to Win32 flags */
+ static const BYTE VIRTUAL_Win32Flags[16] =
+@@ -1977,7 +1995,43 @@
+ }
+ 
+ 
++
++#ifdef NATIVE_JIT
+ /***********************************************************************
++ *           alloc_native_jit_view
++ *
++ * Map a MAP_JIT range where the kernel wants it (MAP_FIXED is refused for MAP_JIT) and
++ * register it as a view. The caller holds virtual_mutex.
++ */
++static NTSTATUS alloc_native_jit_view( struct file_view **view_ret, size_t size, unsigned int vprot )
++{
++    void *ptr;
++    NTSTATUS status;
++
++    size = ROUND_SIZE( 0, size, host_page_mask );
++    ptr = mmap( NULL, size, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0 );
++    if (ptr == MAP_FAILED)
++    {
++        ERR( "MAP_JIT allocation of %zu bytes failed: %s\n", size, strerror( errno ) );
++        return STATUS_NO_MEMORY;
++    }
++    if (is_beyond_limit( ptr, size, address_space_limit ) || find_view_range( ptr, size ))
++    {
++        ERR( "kernel placed MAP_JIT memory at %p-%p, which cannot be a view\n", ptr, (char *)ptr + size );
++        munmap( ptr, size );
++        return STATUS_NO_MEMORY;
++    }
++    if ((status = create_view( view_ret, ptr, size, vprot | VPROT_NATIVEJIT )))
++    {
++        munmap( ptr, size );
++        return status;
++    }
++    TRACE( "native JIT view %p-%p\n", ptr, (char *)ptr + size );
++    return STATUS_SUCCESS;
++}
++#endif
++
++/***********************************************************************
+  *           get_win32_prot
+  *
+  * Convert page protections to Win32 flags.
+@@ -2079,6 +2133,9 @@
+     int prot, next;
+     BYTE vprot;
+ 
++#ifdef NATIVE_JIT
++    if (is_native_jit_view( find_view( base, 0 ) )) return 0;  /* MAP_JIT: the host protection cannot change */
++#endif
+     size = ROUND_SIZE( base, size, host_page_mask );
+ 
+     vprot = get_host_page_vprot( addr );
+@@ -2568,6 +2625,15 @@
+     }
+     else host_end = ROUND_ADDR( base + size, host_page_mask );
+ 
++#ifdef NATIVE_JIT
++    if (is_native_jit_view( view ))
++    {
++        /* MAP_JIT pages cannot be replaced or re-protected; give them back without unmapping */
++        if (host_start < host_end) madvise( host_start, host_end - host_start, MADV_FREE_REUSABLE );
++        set_page_vprot_bits( base, size, 0, VPROT_COMMITTED );
++        return STATUS_SUCCESS;
++    }
++#endif
+     if (host_start < host_end) anon_mmap_fixed( host_start, host_end - host_start, PROT_NONE, 0 );
+     set_page_vprot_bits( base, size, 0, VPROT_COMMITTED );
+     if (host_start < host_end) kernel_writewatch_register_range( view, host_start, host_end - host_start );
+@@ -4790,6 +4856,15 @@
+     mutex_lock( &virtual_mutex );  /* no need for signal masking inside signal handler */
+     vprot = get_host_page_vprot( page );
+ 
++#ifdef NATIVE_JIT
++    if (is_native_jit_view( find_view( addr, 0 ) ))
++    {
++        /* MAP_JIT memory: a write in execute mode (or a jump in write mode) is the emulator's to
++         * handle, and the host protection cannot be changed here anyway */
++        mutex_unlock( &virtual_mutex );
++        return STATUS_ACCESS_VIOLATION;
++    }
++#endif
+ #ifdef HB_JIT
+     if (is_jit_addr( addr ) && (err == EXCEPTION_WRITE_FAULT || err == EXCEPTION_EXECUTE_FAULT))
+     {
+@@ -5340,6 +5415,12 @@
+ 
+             if (vprot & VPROT_WRITECOPY) status = STATUS_INVALID_PAGE_PROTECTION;
+             else if (is_dos_memory) status = allocate_dos_memory( &view, vprot );
++#ifdef NATIVE_JIT
++            else if (native_jit_enabled && !base && (attributes & MEM_EXTENDED_PARAMETER_EC_CODE) &&
++                     (vprot & VPROT_WRITE) && (vprot & VPROT_EXEC) && !limit_low && !limit_high)
++                /* an emulator's native code buffer (FEX: rwx + EC_CODE): MAP_JIT, not page flipping */
++                status = alloc_native_jit_view( &view, size, vprot );
++#endif
+             else status = map_view( &view, base, size, type, vprot, limit_low, limit_high,
+                                     align ? align - 1 : granularity_mask );
+ 
+@@ -7433,3 +7514,89 @@
+ }
+ 
+ #endif  /* _WIN64 */
++
++
++#ifdef NATIVE_JIT
++/***********************************************************************
++ *           unixcall_jit_write_protect
++ *
++ * steamplay-mac 0024: __wine_jit_write_protect( mode ). The previous mode is tracked per
++ * thread because the host has no getter. A thread starts in execute mode, which is also what
++ * the kernel gives new threads and signal handlers.
++ */
++NTSTATUS unixcall_jit_write_protect( void *args )
++{
++    struct jit_write_protect_params *params = args;
++    struct thread_data *data = get_thread_data();
++    ULONG prev;
++
++    if (!pthread_jit_write_protect_supported_np() || !data)
++    {
++        params->ret = ~0u;
++        return STATUS_SUCCESS;
++    }
++    prev = data->jit_writable ? 0 : 1;
++    switch (params->mode)
++    {
++    case 0:
++    case 1:
++        pthread_jit_write_protect_np( params->mode );
++        data->jit_writable = !params->mode;
++        break;
++    case 2:
++        if (!native_jit_enabled) TRACE( "native JIT memory enabled for this process\n" );
++        native_jit_enabled = TRUE;
++        break;
++    default:
++        params->ret = ~0u;
++        return STATUS_SUCCESS;
++    }
++    params->ret = prev;
++    return STATUS_SUCCESS;
++}
++
++
++/***********************************************************************
++ *           unixcall_allocate_native_jit
++ *
++ * steamplay-mac 0024: __wine_allocate_native_jit( base, size ), committed rwx MAP_JIT memory.
++ */
++NTSTATUS unixcall_allocate_native_jit( void *args )
++{
++    struct allocate_native_jit_params *params = args;
++    struct file_view *view;
++    sigset_t sigset;
++    NTSTATUS status;
++    SIZE_T size = *params->size;
++
++    if (!pthread_jit_write_protect_supported_np()) return STATUS_NOT_SUPPORTED;
++    if (!size || *params->base) return STATUS_INVALID_PARAMETER;
++    if (is_beyond_limit( 0, size, working_set_limit )) return STATUS_WORKING_SET_LIMIT_RANGE;
++
++    server_enter_uninterrupted_section( &virtual_mutex, &sigset );
++    status = alloc_native_jit_view( &view, size, VPROT_READ | VPROT_WRITE | VPROT_EXEC | VPROT_COMMITTED );
++    if (!status)
++    {
++        native_jit_enabled = TRUE;
++        *params->base = view->base;
++        *params->size = view->size;
++        VIRTUAL_DEBUG_DUMP_VIEW( view );
++    }
++    server_leave_uninterrupted_section( &virtual_mutex, &sigset );
++    return status;
++}
++
++#else  /* NATIVE_JIT */
++
++NTSTATUS unixcall_jit_write_protect( void *args )
++{
++    ((struct jit_write_protect_params *)args)->ret = ~0u;
++    return STATUS_SUCCESS;
++}
++
++NTSTATUS unixcall_allocate_native_jit( void *args )
++{
++    return STATUS_NOT_SUPPORTED;
++}
++
++#endif  /* NATIVE_JIT */
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -3524,6 +3524,36 @@
+     struct wine_spawnvp_params params = { (char **)argv, wait };
+ 
+     return WINE_UNIX_CALL( unix_wine_spawnvp, &params );
++}
++
++
++/***********************************************************************
++ *           __wine_jit_write_protect
++ *
++ * steamplay-mac 0024: per-thread write/execute mode of native JIT memory (FEX-darwin hook).
++ * mode 0 = writable, 1 = executable, 2 = query and enable; returns the previous mode, or ~0u
++ * when the host has no per-thread JIT write protection.
++ */
++ULONG CDECL __wine_jit_write_protect( ULONG mode )
++{
++    struct jit_write_protect_params params = { mode, ~0u };
++
++    if (WINE_UNIX_CALL( unix_jit_write_protect, &params )) return ~0u;
++    return params.ret;
++}
++
++
++/***********************************************************************
++ *           __wine_allocate_native_jit
++ *
++ * steamplay-mac 0024: committed read-write-execute memory for an emulator's code buffers
++ * (FEX-darwin hook). 0 on success with *base and *size filled in, -1 otherwise.
++ */
++LONG CDECL __wine_allocate_native_jit( void **base, SIZE_T *size )
++{
++    struct allocate_native_jit_params params = { base, size };
++
++    return WINE_UNIX_CALL( unix_allocate_native_jit, &params ) ? -1 : 0;
+ }
+ 
+ 
+--- a/dlls/ntdll/ntdll.spec
++++ b/dlls/ntdll/ntdll.spec
+@@ -1767,6 +1767,8 @@
+ # Unix interface
+ @ stdcall __wine_unix_spawnvp(long ptr)
+ @ stdcall __wine_ctrl_routine(ptr)
++@ cdecl __wine_jit_write_protect(long)
++@ cdecl __wine_allocate_native_jit(ptr ptr)
+ @ extern -private __wine_syscall_dispatcher
+ @ extern -private __wine_unix_call_dispatcher
+ @ extern -private -arch=arm64ec __wine_unix_call_dispatcher_arm64ec
