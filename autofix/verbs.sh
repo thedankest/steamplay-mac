@@ -207,6 +207,102 @@ _np_regfile_has_key() {
   ' "$1"
 }
 
+# NVIDIA installer (NVI2) package: read the copyFile/addRegistry/addPath phases of the .nvi
+# manifest $1 and print "C<TAB>target<TAB>source", "R<TAB>view<TAB>key<TAB>name<TAB>type<TAB>value"
+# (name "@" = default value, "-" = key only; view 32 = an x86 phase) and "P<TAB>dir" lines. NVI2's
+# setup.exe refuses machines its <filter platform=...> does not list (FEX reports arm64), so the
+# verb does what the manifest says instead of running it. NAME=VALUE arguments after $1 define
+# the ${{NAME}} variables NVI2 itself supplies (install folders, NvidiaSoftwareKey).
+_np_nvi_plan() {
+  _np_nv_f=$1
+  shift
+  LC_ALL=C awk -v FS='\001' '
+    function attr(l, n,   m) {
+      if (match(l, " " n "=\"[^\"]*\"")) { m = substr(l, RSTART + length(n) + 3, RLENGTH - length(n) - 4); return m }
+      return "\001"
+    }
+    function subst(v,   n, i, out, guard) {
+      for (guard = 0; (i = index(v, "${{")) > 0 && guard < 20; guard++) {
+        n = substr(v, i + 3); n = substr(n, 1, index(n, "}}") - 1)
+        if (!(n in vars)) { bad = bad " " n; return v }
+        v = substr(v, 1, i - 1) vars[n] substr(v, i + 3 + length(n) + 2)
+      }
+      return v
+    }
+    BEGIN { for (i = 1; i < ARGC - 1; i++) { e = ARGV[i]; vars[substr(e, 1, index(e, "=") - 1)] = substr(e, index(e, "=") + 1); ARGV[i] = "" } }
+    { sub(/\r$/, ""); sub(/^\357\273\277/, "") }
+    incomment { if (index($0, "-->")) incomment = 0; next }
+    /<!--/ { if (!index($0, "-->")) incomment = 1; next }
+    /<localized/ { inloc = 1 } /<\/localized>/ { inloc = 0; next }
+    /<string / && !inloc { n = attr($0, "name"); v = attr($0, "value"); if (n != "\001" && v != "\001" && !(n in vars)) vars[n] = v; next }
+    /<standard / { view = (attr($0, "platform") == "x86") ? 32 : 64; next }
+    /<\/standard>/ { view = 0; next }
+    /<copyFile / && view { lines[++nl] = "C\t" attr($0, "target") "\t" attr($0, "source"); next }
+    /<addRegistry / && view {
+      n = attr($0, "valueName"); t = attr($0, "type"); v = attr($0, "value")
+      if (n == "\001") { n = "-"; t = "-"; v = "" } else if (n == "") n = "@"
+      if (t == "REG_MULTI_SZ") { sp = attr($0, "split"); if (sp != "\001") gsub(sp == "|" ? "\\|" : sp, "\001", v) }
+      lines[++nl] = "R\t" view "\t" attr($0, "keyName") "\t" n "\t" t "\t" v; next
+    }
+    /<addPath / && view { lines[++nl] = "P\t" attr($0, "target"); next }
+    END {
+      for (i = 1; i <= nl; i++) { l = subst(lines[i]); if (l ~ /\001\t|\t\001$/) bad = bad " attribute"; print l }
+      if (bad != "") { print "unresolved:" bad > "/dev/stderr"; exit 1 }
+    }
+  ' "$@" "$_np_nv_f"
+}
+
+# .reg text for the R and P lines of a _np_nvi_plan on stdin; $1 = the prefix's current PATH.
+# REGEDIT4, so hex(2)/hex(7) data is single-byte text: Wine's regedit reads an ASCII file with the
+# 5.00 header the same way and would widen UTF-16 bytes a second time. ASCII only.
+_np_nvi_reg() {
+  LC_ALL=C AF_PATH=$1 awk -F '\t' '
+    function q(s) { gsub(/\\/, "\\\\", s); gsub(/"/, "\\\"", s); return s }
+    function hexw(s, z,   i, c, o, out) {
+      for (i = 1; i <= length(s); i++) {
+        c = substr(s, i, 1)
+        if (c == "\001") o = 0; else { o = ord[c]; if (o == "") { bad = 1; o = 63 } }
+        out = out sprintf("%02x,", o)
+      }
+      out = out "00"
+      if (z) out = out ",00"
+      return out
+    }
+    function key(view, k,   u) {
+      u = toupper(k)
+      if (u !~ /^HKEY_LOCAL_MACHINE\\SOFTWARE\\/ && u !~ /^HKEY_CURRENT_USER\\SOFTWARE\\/) { bad = 1; return k }
+      if (view == 32 && u ~ /^HKEY_LOCAL_MACHINE\\SOFTWARE\\/ && u !~ /^HKEY_LOCAL_MACHINE\\SOFTWARE\\WOW6432NODE\\/)
+        k = substr(k, 1, 28) "Wow6432Node\\" substr(k, 29)
+      return k
+    }
+    BEGIN { for (i = 32; i < 127; i++) ord[sprintf("%c", i)] = i; print "REGEDIT4" }
+    $1 == "R" {
+      k = key($2, $3)
+      if (k != last) { print ""; print "[" k "]"; last = k }
+      if ($4 == "-") next
+      n = ($4 == "@") ? "@" : "\"" q($4) "\""
+      if ($5 == "REG_SZ") print n "=\"" q($6) "\""
+      else if ($5 == "REG_DWORD") printf "%s=dword:%08x\n", n, $6 + 0
+      else if ($5 == "REG_MULTI_SZ") print n "=hex(7):" hexw($6, 1)
+      else if ($5 == "REG_EXPAND_SZ") print n "=hex(2):" hexw($6, 0)
+      else bad = 1
+      next
+    }
+    $1 == "P" { add = add ";" $2 }
+    END {
+      if (add != "") {
+        p = ENVIRON["AF_PATH"]; n = split(substr(add, 2), dirs, ";")
+        for (i = 1; i <= n; i++) if (index(";" tolower(p) ";", ";" tolower(dirs[i]) ";") == 0) p = p (p == "" ? "" : ";") dirs[i]
+        if (p != ENVIRON["AF_PATH"]) {
+          print ""; print "[HKEY_LOCAL_MACHINE\\System\\CurrentControlSet\\Control\\Session Manager\\Environment]"
+          print "\"PATH\"=hex(2):" hexw(p, 0)
+        }
+      }
+      if (bad) exit 1
+    }
+  '
+}
+
 _np_run_step() {
   _np_st_k="verbs.$_np_v.steps.$1"
   _np_st_t=$(_np_j "$_np_st_k.type") || return 1
@@ -313,6 +409,54 @@ _np_run_step() {
         af_note "verb $_np_v" "cached $_np_st_to"
         _np_st_j=$((_np_st_j + 1))
       done
+      ;;
+    nvi)
+      _np_st_i=$(_np_j "$_np_st_k.file") || return 1
+      _np_st_f=""
+      eval "_np_st_f=\$_np_file_$_np_st_i"
+      _np_st_off=$(_np_j "$_np_st_k.sfx_offset") || _np_st_off=0
+      _np_st_a="$_np_tmp/x$_np_st_i"
+      mkdir -p "$_np_st_a" || return 1
+      tail -c "+$((_np_st_off + 1))" "$_np_st_f" > "$_np_tmp/payload" && bsdtar -xf "$_np_tmp/payload" -C "$_np_st_a" 2>/dev/null \
+        || { af_note "verb $_np_v" "cannot unpack $_np_st_f at offset $_np_st_off"; return 1; }
+      _np_st_m="$_np_st_a/$(_np_j "$_np_st_k.manifest")"
+      [ -f "$_np_st_m" ] || { af_note "verb $_np_v" "no $(_np_j "$_np_st_k.manifest") in the package"; return 1; }
+      set --
+      _np_st_n=$(_np_count "$_np_st_k.vars")
+      _np_st_j=0
+      while [ "$_np_st_j" -lt "$_np_st_n" ]; do
+        set -- "$@" "$(_np_j "$_np_st_k.vars.$_np_st_j")"
+        _np_st_j=$((_np_st_j + 1))
+      done
+      _np_nvi_plan "$_np_st_m" "$@" > "$_np_tmp/plan" 2>> "${log:-/dev/null}" || { af_note "verb $_np_v" "cannot read the package manifest"; return 1; }
+      _np_st_d=$(dirname "$_np_st_m")
+      _np_st_c=0
+      while IFS="$(printf '\t')" read -r _np_st_kind _np_st_to _np_st_from; do
+        [ "$_np_st_kind" = C ] || continue
+        case "$_np_st_to" in
+          [Cc]:\\*) ;;
+          *) af_note "verb $_np_v" "refusing target $_np_st_to"; return 1 ;;
+        esac
+        case "$_np_st_to$_np_st_from" in *..*) af_note "verb $_np_v" "refusing path with .."; return 1 ;; esac
+        _np_st_dst="$WINEPREFIX/drive_c/$(printf '%s' "${_np_st_to#??\\}" | tr '\\' /)"
+        _np_st_src="$_np_st_d/$(printf '%s' "$_np_st_from" | tr '\\' /)"
+        [ -f "$_np_st_src" ] || { af_note "verb $_np_v" "package has no $_np_st_from"; return 1; }
+        mkdir -p "$(dirname "$_np_st_dst")" && cp -f "$_np_st_src" "$_np_st_dst" || return 1
+        _np_st_c=$((_np_st_c + 1))
+      done < "$_np_tmp/plan"
+      [ "$_np_st_c" -gt 0 ] || { af_note "verb $_np_v" "the package manifest lists no files"; return 1; }
+      # PATH from the live registry: system.reg on disk lags while a wineserver is running
+      if grep -q '^P' "$_np_tmp/plan"; then
+        _np_st_path=$("$WINELOADER" reg query 'HKLM\System\CurrentControlSet\Control\Session Manager\Environment' /v PATH 2>/dev/null \
+          | tr -d '\r' | sed -n -E 's/^[[:space:]]+PATH[[:space:]]+REG_(EXPAND_)?SZ[[:space:]]+//p' | head -1)
+        if [ -z "$_np_st_path" ]; then
+          af_note "verb $_np_v" "cannot read the prefix PATH, leaving it alone"
+          grep -v '^P' "$_np_tmp/plan" > "$_np_tmp/plan.nopath"; mv -f "$_np_tmp/plan.nopath" "$_np_tmp/plan"
+        fi
+      fi
+      _np_nvi_reg "${_np_st_path:-}" < "$_np_tmp/plan" > "$_np_tmp/nvi.reg" || { af_note "verb $_np_v" "cannot convert the package registry entries"; return 1; }
+      (cd "$_np_tmp" && "$WINELOADER" regedit /S nvi.reg) >> "${log:-/dev/null}" 2>&1 || return 1
+      af_note "verb $_np_v" "installed $_np_st_c files and $(grep -c '^R' "$_np_tmp/plan") registry entries from $(_np_j "$_np_st_k.manifest") without running its setup.exe"
       ;;
     dll_override)
       _np_st_mode=$(_np_j "$_np_st_k.mode") || _np_st_mode=""
@@ -445,6 +589,8 @@ np_verb() (
   while [ "$_np_i" -lt "$_np_n" ]; do
     if ! _np_run_step "$_np_i"; then
       af_note "verb $_np_v" "step $_np_i ($(_np_j "verbs.$_np_v.steps.$_np_i.type")) failed"
+      # a failing installer fails the same way next launch; do not hold every launch on it
+      mkdir -p "$(dirname "$_np_marker")" && date '+%Y-%m-%d %H:%M:%S failed' > "$_np_marker"
       exit 1
     fi
     _np_i=$((_np_i + 1))

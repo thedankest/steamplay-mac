@@ -13,11 +13,19 @@
 #                    no PhysXCore.dll in the prefix -> np_verb physx
 #   installscript    Steam installscript.vdf redists -> verbs (see installscript.py); a redist
 #                    whose HasRunKey is set but whose payload is missing counts as not installed
+#   ue-audio         Unreal Engine 4/5 (*/Binaries/Win64/*-Win64-Shipping.exe) and
+#                    NOTPROTON_UE_AUDIO_BUFFERS=N -> CommandLineAppend -AudioNumBuffersToEnqueue=N
+#                    for that exe (Highball 0006); unset or 0 removes what an earlier run set.
+#                    Opt-in until the Librarian A/B shows it cures the XAudio2 crackle.
+#   fex-x87          NOTPROTON_FEX_X87_REDUCED=1 -> FEX_X87REDUCEDPRECISION=1 (64-bit x87 instead
+#                    of 80-bit softfloat; old 32-bit games on the FEX runner, ~3.7x on x87 maths).
+#                    FEX_* names are not on the launch-option allow-list, NOTPROTON_* are.
 #
 # Entry points: autofix_run EXE (before launch), autofix_post (after the game exited; the
 # UE3 ini only exists after a first run). Inputs: $STEAM_COMPAT_INSTALL_PATH, $WINEPREFIX,
 # $WINELOADER, $log, $AUTOFIX_DIR. Needs helpers.sh and verbs.sh.
-# Settings: NOTPROTON_AUTOFIX_DISABLE, NOTPROTON_AUTOFIX_REDIST=all (also install optional
+# Settings: NOTPROTON_AUTOFIX_DISABLE, NOTPROTON_UE_AUDIO_BUFFERS, NOTPROTON_FEX_X87_REDUCED,
+# NOTPROTON_AUTOFIX_REDIST=all (also install optional
 # installscript redists: DirectX, .NET, XNA), NOTPROTON_PE_D3D, NOTPROTON_PYTHON (path or none),
 # NOTPROTON_OPENAL_CACHE.
 
@@ -308,6 +316,61 @@ af_detect_ue3_audio() {
   rm -f "${TMPDIR:-/tmp}/af_ue3.$$"
 }
 
+# ---- ue-audio -------------------------------------------------------------------------------
+
+# UE4/5 defaults to 2 queued mixer buffers on Windows; the XAudio2 -> mmdevapi -> CoreAudio hops
+# under Wine leave less slack than that (research/CROSSOVER-VS-OURS.md section 2). The marker in
+# the prefix records which exes got the append, so turning the setting off needs no reg query.
+af_detect_ue_audio() {
+  af_enabled ue-audio || return 0
+  [ -d "${STEAM_COMPAT_INSTALL_PATH:-}" ] || return 0
+  af_uea_marker="$WINEPREFIX/notproton-ue-audio"
+  af_uea_n=${NOTPROTON_UE_AUDIO_BUFFERS:-0}
+  case "$af_uea_n" in
+    *[!0-9]*|'') af_note ue-audio "NOTPROTON_UE_AUDIO_BUFFERS=$af_uea_n is not a number, ignored"; af_uea_n=0 ;;
+  esac
+  af_uea_want=""
+  if [ "$af_uea_n" -gt 0 ]; then
+    af_uea_want=$(find "$STEAM_COMPAT_INSTALL_PATH" -maxdepth 4 -type f -ipath '*/Binaries/Win64/*-Win64-Shipping.exe' 2>/dev/null \
+      | while IFS= read -r af_uea_f; do printf '%s %s\n' "$af_uea_n" "$(basename "$af_uea_f")"; done | sort)
+    [ -n "$af_uea_want" ] || { af_note ue-audio "no *-Win64-Shipping.exe, not Unreal Engine 4/5"; return 0; }
+  fi
+  af_uea_have=$(cat "$af_uea_marker" 2>/dev/null || true)
+  if [ "$af_uea_want" = "$af_uea_have" ]; then
+    [ -n "$af_uea_want" ] && af_note ue-audio "-AudioNumBuffersToEnqueue=$af_uea_n already set"
+    return 0
+  fi
+  if [ -n "$af_uea_have" ]; then
+    printf '%s\n' "$af_uea_have" | while read -r af_uea_old af_uea_exe; do
+      "$WINELOADER" reg delete "HKCU\\Software\\Wine\\AppDefaults\\$af_uea_exe" /v CommandLineAppend /f >> "${log:-/dev/null}" 2>&1 || true
+      af_note ue-audio "removed -AudioNumBuffersToEnqueue=$af_uea_old from $af_uea_exe"
+    done
+    rm -f "$af_uea_marker"
+  fi
+  [ -n "$af_uea_want" ] || return 0
+  printf '%s\n' "$af_uea_want" | while read -r af_uea_n af_uea_exe; do
+    set_reg "HKCU\\Software\\Wine\\AppDefaults\\$af_uea_exe" CommandLineAppend REG_SZ "-AudioNumBuffersToEnqueue=$af_uea_n"
+    af_note ue-audio "$af_uea_exe gets -AudioNumBuffersToEnqueue=$af_uea_n"
+  done
+  printf '%s\n' "$af_uea_want" > "$af_uea_marker"
+}
+
+# ---- fex-x87 --------------------------------------------------------------------------------
+
+af_detect_fex_x87() {
+  af_enabled fex-x87 || return 0
+  [ "${NOTPROTON_FEX_X87_REDUCED:-0}" = 1 ] || return 0
+  if [ -n "${FEX_X87REDUCEDPRECISION+x}" ]; then
+    af_note fex-x87 "FEX_X87REDUCEDPRECISION=$FEX_X87REDUCEDPRECISION already set, left alone"
+    return 0
+  fi
+  set_env FEX_X87REDUCEDPRECISION 1
+  case "${wine_unix:-}" in
+    */aarch64-unix) af_note fex-x87 "set FEX_X87REDUCEDPRECISION=1" ;;
+    *) af_note fex-x87 "set FEX_X87REDUCEDPRECISION=1, but this runner uses Rosetta, so it has no effect" ;;
+  esac
+}
+
 # ---- physx-legacy ---------------------------------------------------------------------------
 
 af_physx_present() {
@@ -441,6 +504,8 @@ autofix_run() {
   af_detect_ue3_audio
   af_detect_installscript
   af_detect_physx
+  af_detect_ue_audio
+  af_detect_fex_x87
   return 0
 }
 
