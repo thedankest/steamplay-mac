@@ -200,6 +200,30 @@ d3dmetal_read_source() { # runner
     return 0
 }
 
+# A licence prompt nobody answered must not take away D3DMetal the user already accepted: when
+# the installed runner of the same id has D3DMetal with a licence record and its file hashes still
+# match, its D3DMetal files replace the staged ones (which may be the dist build's older copy).
+d3dmetal_keep_installed() { # staging installed-runner
+    local st="$1" r="$2" f
+    [ -f "$r/lib/external/D3DMetal.source" ] && [ -d "$r/lib/external/D3DMetal.framework" ] || return 1
+    [ -n "$(sed -n 's/^license_sha256=//p' "$r/lib/external/D3DMetal.source" | grep -v '^none$' | head -1)" ] || return 1
+    runner_manifest_verify "$r" "$r/lib/external/D3DMetal.files.sha256" || return 1
+    rm -rf "$st/lib/external/D3DMetal.framework" "$st/lib/renderers/d3dmetal" "$st/lib/external/libd3dshared.dylib" \
+        "$st/lib/external/D3DMetal-License.rtf" "$st/lib/external/D3DMetal.source" "$st/lib/external/D3DMetal.files.sha256"
+    mkdir -p "$st/lib/external" "$st/lib/renderers"
+    ditto "$r/lib/external/D3DMetal.framework" "$st/lib/external/D3DMetal.framework" || return 1
+    if [ -d "$r/lib/renderers/d3dmetal" ]; then ditto "$r/lib/renderers/d3dmetal" "$st/lib/renderers/d3dmetal" || return 1; fi
+    for f in libd3dshared.dylib D3DMetal-License.rtf D3DMetal.source D3DMetal.files.sha256; do
+        if [ -e "$r/lib/external/$f" ]; then cp -pR "$r/lib/external/$f" "$st/lib/external/$f" || return 1; fi
+    done
+    d3dmetal_read_source "$st"
+    if [ -n "$D3D_VERSION" ] && [ -f "$st/runner.json" ]; then
+        jq --arg v "$D3D_VERSION" '.renderers = ((.renderers // {}) + {d3dmetal: $v})' "$st/runner.json" > "$st/runner.json.tmp" \
+            && mv -f "$st/runner.json.tmp" "$st/runner.json" || return 1
+    fi
+    runner_manifest_verify "$st" "$st/lib/external/D3DMetal.files.sha256"
+}
+
 runner_d3dmetal() { # staging
     local st="$1" rc=0 errf lic args=()
     D3D_STATUS="" D3D_ACCEPTED_AT=""
@@ -255,6 +279,10 @@ runner_d3dmetal() { # staging
                         '{event:"confirm",id:"d3dmetal_license",text:("Apple Game Porting Toolkit licence: " + $p),license_path:$p,url:null,token:$k,env:"NP_D3DMETAL_LICENSE_TOKEN"}')"
                     say "    D3DMetal licence needs acceptance; a GUI re-runs with NP_D3DMETAL_LICENSE_TOKEN=${lic%% *}"
                 fi
+            fi
+            if [ -n "${RUNNER_VER:-}" ] && d3dmetal_keep_installed "$st" "$NP_SUPPORT/runners/$RUNNER_VER"; then
+                D3D_STATUS=kept
+                say "    D3DMetal ${D3D_VERSION:-?} kept from the installed runner (its licence was accepted before)"
             fi
             ;;
         *) rm -f "$errf"; warn "install-d3dmetal.sh failed (exit $rc)"; return 1 ;;

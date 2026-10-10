@@ -194,6 +194,11 @@ if want install_cycle; then
     check "global.env defaults written" bash -c 'grep -qx ROSETTA_ADVERTISE_AVX=1 "$1" && grep -qx WINEMSYNC=1 "$1"' _ "$NP_SUPPORT/global.env"
     check "events: every stdout line is JSON or human text, result ok" bash -c 'grep "^{" "$1" | jq -e -s "map(select(.event==\"result\"))[-1].status == \"ok\"" >/dev/null' _ "$T/out/out"
     check "events: gate step reported ok" bash -c 'grep "^{" "$1" | jq -e -s "any(.event==\"step\" and .id==\"gate\" and .status==\"ok\")" >/dev/null' _ "$T/out/out"
+    plist="$NP_LAUNCH_AGENTS/io.github.steamplay-mac.reapply.plist"
+    check "the watcher LaunchAgent is written and valid" plutil -lint -s "$plist"
+    check "it runs the support copy of watch.sh with this install.sh" bash -c '[ "$(plutil -extract ProgramArguments.1 raw -o - "$1")" = "$2/tools/steamplay-watch.sh" ] && [ "$(plutil -extract ProgramArguments.2 raw -o - "$1")" = "$3/scripts/install.sh" ] && cmp -s "$2/tools/steamplay-watch.sh" "$3/scripts/watch.sh"' _ "$plist" "$NP_SUPPORT" "$REPO"
+    check "it watches the inner client" bash -c 'plutil -extract WatchPaths xml1 -o - "$1" | grep -q "Steam.AppBundle/Steam/Contents/MacOS/steamclient.dylib"' _ "$plist"
+    check "it was bootstrapped (test log)" grep -q "^bootstrap $plist" "$T/ctl/launchctl.log"
 
     inst -- doctor --json
     check "doctor --json exits 0 (all OK)" eq "$RC" 0
@@ -237,6 +242,7 @@ if want install_cycle; then
 
     inst NP_TEST_ANSWER_UNINSTALL=yes -- uninstall
     check "uninstall exits 0" eq "$RC" 0
+    check "uninstall removed the watcher" bash -c '[ ! -e "$1" ] && grep -q "^bootout $1" "$2"' _ "$plist" "$T/ctl/launchctl.log"
     check "PHASE 3 GATE: Steam.app tree hash, cdhash and signature equal the original" app_is_original
     check "Steam.app TeamID is Valve's again (via test override on the original cdhash)" bash -c '[ "$(codesign -dvvv "$1" 2>&1 | sed -n "s/^CDHash=//p")" = "$2" ]' _ "$NP_STEAM_APP" "$ORIG_CD"
     check "outer steam.cfg restored" eq "$(cat "$NP_STEAM_SUPPORT/steam.cfg")" "$ORIG_CFG"
@@ -387,6 +393,12 @@ if want release; then
     check "licence confirm event with the licence hash" eq "$ltok" "$(shasum -a 256 "$T/fake-License.rtf" | cut -c1-64)"
     inst NP_TEST_RUNNER_LOCK="$W/lock" NP_D3DMETAL_LICENSE_TOKEN="$ltok" NP_TEST_ANSWER_PLAN=yes -- all --from release
     check "with the licence token D3DMetal installs" eq "$(st '.runners["selfbuilt-test-r1-abcdef12"].d3dmetal.status')" installed
+    # A later run without the token must keep the D3DMetal accepted above, not drop it.
+    d3dsum="$(cat "$NP_SUPPORT/runners/selfbuilt-test-r1-abcdef12/lib/external/D3DMetal.files.sha256")"
+    inst NP_TEST_RUNNER_LOCK="$W/lock" NP_TEST_ANSWER_PLAN=yes -- all --from release
+    check "without the token the accepted D3DMetal is kept" eq "$(st '.runners["selfbuilt-test-r1-abcdef12"].d3dmetal.status')" kept
+    check "and its files are unchanged" eq "$(cat "$NP_SUPPORT/runners/selfbuilt-test-r1-abcdef12/lib/external/D3DMetal.files.sha256" 2>/dev/null)" "$d3dsum"
+    check "and doctor accepts them" bash -c 'cd "$1" && shasum -a 256 -c --quiet lib/external/D3DMetal.files.sha256' _ "$NP_SUPPORT/runners/selfbuilt-test-r1-abcdef12"
 
     # Archive validation, unit level.
     mk() { # name tar-args... -> $rel/<name>.tar.zst
@@ -453,11 +465,30 @@ if want valve_update; then
     rm -rf "$NP_STEAM_APP"
     ditto "$(st .steam.active_backup)" "$NP_STEAM_APP"
     touch "$T/ctl/steam-running"
-    inst NP_TEST_DIALOG_ANSWER=none -- reapply --auto
+    inst NP_TEST_DIALOG_ANSWER=none NP_PROGRESS_FD=1 -- reapply --auto
     check "reapply --auto without an answer: exit 0" eq "$RC" 0
     check "and no change" app_is_original
+    check "no answer is not a 'not now'" eq "$(st .watch.declined.cdhash)" null
+    check "no answer: one notification" grep -q '"event":"notify".*went unanswered' "$T/out/out"
+    check "no journal left open by --auto" bash -c '[ "$(jq -r .journal.state "$1")" != in_progress ]' _ "$NP_SUPPORT/install-state.json"
+    inst NP_TEST_DIALOG_ANSWER=none NP_PROGRESS_FD=1 -- reapply --auto
+    check "a second unanswered dialog does not notify again" bash -c '! grep -q "\"event\":\"notify\"" "$1"' _ "$T/out/out"
+    inst NP_TEST_DIALOG_ANSWER=no -- reapply --auto
+    check "the 'not now' is recorded for this Steam.app" eq "$(st .watch.declined.cdhash)" "$ORIG_CD"
     inst NP_TEST_DIALOG_ANSWER=yes -- reapply --auto
+    check "reapply --auto right after 'not now': exit 0" eq "$RC" 0
+    check "and it does not ask again within a day" grep -q 'declined for this Steam.app' "$T/out/out"
+    check "still no change" app_is_original
+    inst NP_WATCH_ASK_AGAIN=0 NP_TEST_DIALOG_ANSWER=yes -- reapply --auto
     check "reapply --auto with 'Re-apply': exit 0" eq "$RC" 0
+    check "it hands over to Terminal" grep -q "open-terminal $NP_SUPPORT/tools/reapply-now.command" "$T/ctl/open.log"
+    check "the Terminal command runs an interactive reapply" grep -q 'scripts/install.sh reapply$' "$NP_SUPPORT/tools/reapply-now.command"
+    check "the watcher itself changed nothing (launchd lacks App Management)" app_is_original
+    check "journal not left in progress" bash -c '[ "$(jq -r .journal.state "$1")" != in_progress ]' _ "$NP_SUPPORT/install-state.json"
+    check "the Terminal command keeps this install's paths" grep -q "NP_STEAM_APP=" "$NP_SUPPORT/tools/reapply-now.command"
+    check "the lock was released before Terminal opened" test ! -L "$NP_SUPPORT/.install.lock"
+    inst NP_TEST_ANSWER_PLAN=yes NP_TEST_ANSWER_START_STEAM=yes -- reapply
+    check "the interactive reapply: exit 0" eq "$RC" 0
     check "Steam.app patched again" app_patched
     check "a second verified backup was taken" eq "$(st '[.steam.backups[] | select(.kind=="original")] | length')" 2
     check "Steam restarted and verified" eq "$(st .verify.result)" pass
@@ -520,6 +551,16 @@ if want gate_live; then
     check "no live profile: reapply --auto stops (exit 1) even with 'Re-apply' answered" eq "$RC" 1
     check "and notifies" grep -q '"event":"notify".*Steam Play is switched off' "$T/out/out"
     check "and disables the signatures (no hooks can half-load)" test ! -e "$NP_SUPPORT/signatures"
+    inst NP_PROGRESS_FD=1 -- reapply --auto
+    check "the watcher's next run: exit 0, already reported" bash -c '[ "$1" = 0 ] && grep -q "already reported" "$2"' _ "$RC" "$T/out/out"
+    check "and no second notification" bash -c '! grep -q "\"event\":\"notify\"" "$1"' _ "$T/out/out"
+    mv "$NP_SUPPORT/tools/anchorcheck" "$W/anchorcheck.saved"
+    echo "steamclient v2b" > "$NP_STEAM_SUPPORT/Steam.AppBundle/Steam/Contents/MacOS/steamclient.dylib"
+    inst NP_PROGRESS_FD=1 -- reapply --auto
+    check "a check that could not run (anchorcheck missing) is not reported as 'no profile fits'" grep -q '"event":"notify".*could not check' "$T/out/out"
+    inst NP_PROGRESS_FD=1 -- reapply --auto
+    check "and it is retried (not 'already reported')" bash -c '[ "$1" = 1 ] && ! grep -q "already reported" "$2"' _ "$RC" "$T/out/out"
+    mv "$W/anchorcheck.saved" "$NP_SUPPORT/tools/anchorcheck"
     check "disabled state recorded" eq "$(st .client.signatures.disabled)" true
     check "Steam.app untouched" eq "$(tree_hash "$NP_STEAM_APP")" "$patched_hash"
     inst -- doctor --json
@@ -535,6 +576,71 @@ if want gate_live; then
     echo 1790904859 > "$T/ctl/live-build"
     inst -- reapply
     check "a client that matches another profile: that profile alone is installed" eq "$(ls "$NP_SUPPORT/signatures/macos.arm64" | tr '\n' ' ')" "1790904859.json "
+fi
+
+# ================================================================================================
+if want local_profiles; then
+    begin local_profiles
+    mkdir -p "$W/localsigs"
+    jq '.steam_build = 1799000000' "$REPO/notproton/signatures/macos.arm64/1790904859.json" > "$W/localsigs/1799000000.json"
+    echo 1799000000 > "$T/ctl/live-build"
+    inst "${YES[@]}" NP_TEST_SIG_SRC_LOCAL="$W/localsigs" -- all --from dist
+    check "a profile from signatures/ (make-signatures) is used: exit 0" eq "$RC" 0
+    check "it alone is installed" eq "$(ls "$NP_SUPPORT/signatures/macos.arm64" | tr '\n' ' ')" "1799000000.json "
+    check "the gate recorded its build" eq "$(st .client.binary_build)" 1799000000
+    jq '.steam_build = 1799000001 | .generated = {tool: "tools/make-signatures.py", reviewed: false}' "$W/localsigs/1799000000.json" > "$W/localsigs/1799000001.json"
+    echo 1799000001 > "$T/ctl/live-build"
+    echo "steamclient v1b" > "$NP_STEAM_SUPPORT/Steam.AppBundle/Steam/Contents/MacOS/steamclient.dylib"
+    inst NP_TEST_SIG_SRC_LOCAL="$W/localsigs" -- reapply
+    check "an unreviewed generated profile is not used (no live profile): exit 1" eq "$RC" 1
+    check "and the skip is named" grep -q '1799000001.json was made by tools/make-signatures.py and is not marked reviewed' "$T/out/err"
+    jq '.generated.reviewed = true' "$W/localsigs/1799000001.json" > "$W/x.json" && mv "$W/x.json" "$W/localsigs/1799000001.json"
+    inst NP_TEST_SIG_SRC_LOCAL="$W/localsigs" -- reapply
+    check "once marked reviewed it is used: exit 0" eq "$RC" 0
+    check "it alone is installed now" eq "$(ls "$NP_SUPPORT/signatures/macos.arm64" | tr '\n' ' ')" "1799000001.json "
+    inst NP_TEST_SIG_SRC_LOCAL="$W/localsigs" -- reapply
+    check "reapply with it: unchanged, exit 0" bash -c '[ "$1" = 0 ] && grep -q "nothing changed" "$2"' _ "$RC" "$T/out/out"
+    echo '{"different": true}' > "$W/localsigs/1788400362.json"
+    echo "steamclient v2" > "$NP_STEAM_SUPPORT/Steam.AppBundle/Steam/Contents/MacOS/steamclient.dylib"
+    inst NP_TEST_SIG_SRC_LOCAL="$W/localsigs" -- reapply
+    check "a local profile that clashes with notproton's: exit 1" eq "$RC" 1
+    check "and says which one" grep -q '1788400362.json is in' "$T/out/err"
+fi
+
+# ================================================================================================
+if want watcher; then
+    begin watcher
+    inst -- watch on
+    check "watch on before install.sh all: refused" eq "$RC" 1
+    inst "${YES[@]}" -- all --from dist
+    inst -- watch off
+    check "watch off: exit 0" eq "$RC" 0
+    check "plist and script gone" bash -c '[ ! -e "$1/io.github.steamplay-mac.reapply.plist" ] && [ ! -e "$2/tools/steamplay-watch.sh" ]' _ "$NP_LAUNCH_AGENTS" "$NP_SUPPORT"
+    inst -- doctor --json
+    check "doctor warns without a watcher" eq "$(jq -r '.checks[] | select(.id=="watch") | .verdict' "$T/out/out")" warn
+    inst "${YES[@]}" -- all --from dist
+    check "all keeps a watcher the user turned off, off" test ! -e "$NP_LAUNCH_AGENTS/io.github.steamplay-mac.reapply.plist"
+    inst -- watch on
+    check "watch on: exit 0" eq "$RC" 0
+    inst -- doctor --json
+    check "doctor: watcher ok" eq "$(jq -r '.checks[] | select(.id=="watch") | .verdict' "$T/out/out")" ok
+    inst -- watch status
+    check "watch status says on" grep -q 'watcher: on' "$T/out/out"
+    inst "${YES[@]}" -- all --from dist
+    check "all after watch on keeps it on" test -f "$NP_LAUNCH_AGENTS/io.github.steamplay-mac.reapply.plist"
+    w="$NP_SUPPORT/tools/steamplay-watch.sh"
+    RC=0; NP_WATCH_SETTLE=0 bash "$w" "$REPO/scripts/install.sh" > "$T/out/out" 2>&1 || RC=$?
+    check "the watcher runs: exit 0" eq "$RC" 0
+    check "it ran reapply --auto, which found nothing changed" bash -c 'grep -q "nothing changed" "$1" && grep -q "reapply --auto exit 0" "$1"' _ "$NP_SUPPORT/logs/watch.log"
+    echo "steamclient v2" > "$NP_STEAM_SUPPORT/Steam.AppBundle/Steam/Contents/MacOS/steamclient.dylib"
+    rm -f "$NP_STEAM_SUPPORT/Steam.AppBundle/Steam/Contents/MacOS/steam.cfg"
+    NP_WATCH_SETTLE=0 bash "$w" "$REPO/scripts/install.sh" > "$T/out/out" 2>&1 || true
+    check "after a client update it re-applied (inner steam.cfg blocked again)" grep -qx 'BootStrapperInhibitUpdateOnLaunch=enable' "$NP_STEAM_SUPPORT/Steam.AppBundle/Steam/Contents/MacOS/steam.cfg"
+    check "and recorded the new client" eq "$(st .client.steamclient_sha256)" "$(shasum -a 256 "$NP_STEAM_SUPPORT/Steam.AppBundle/Steam/Contents/MacOS/steamclient.dylib" | cut -c1-64)"
+    RC=0; NP_WATCH_SETTLE=0 bash "$w" "$T/nonexistent/install.sh" > "$T/out/out" 2>&1 || RC=$?
+    check "a moved repo: the watcher exits 0 and leaves a marker" bash -c '[ "$1" = 0 ] && [ -e "$2/logs/.watch-engine-missing" ]' _ "$RC" "$NP_SUPPORT"
+    RC=0; NP_WATCH_SETTLE=1 NP_WATCH_SETTLE_MAX=2 bash -c 'bash "$1" "$2" & p=$!; for i in 1 2 3 4; do echo x$i >> "$3"; sleep 0.6; done; wait $p' _ "$w" "$REPO/scripts/install.sh" "$NP_STEAM_SUPPORT/Steam.AppBundle/Steam/Contents/MacOS/steamui.dylib" || RC=$?
+    check "files still being written: it waits, then gives up without running reapply" bash -c 'tail -1 "$1" | grep -q "still changing"' _ "$NP_SUPPORT/logs/watch.log"
 fi
 
 # ================================================================================================

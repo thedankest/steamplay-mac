@@ -151,6 +151,7 @@ if [ -f "$DXMT_INSTALL/aarch64-unix/winemetal.so" ]; then
     for d in aarch64-windows i386-windows; do
         [ -d "$DXMT_INSTALL/$d" ] || continue
         cp -R "$DXMT_INSTALL/$d" "$R/"
+        find "$R/$d" -name '*.dll.a' -delete   # meson's import libraries; nothing loads them
         # winemetal is no Wine DLL: upstream ntdll loads a builtin only when its file exists in
         # system32/syswow64 (outside prefix bootstrap), and wineboot writes that placeholder
         # only for DLLs the runner itself carries. Same as Runner A (assemble-runner.sh).
@@ -202,6 +203,11 @@ cat > "$OUT/runner.json" <<EOF
 }
 EOF
 jq . "$OUT/runner.json" >/dev/null || die "runner.json is not valid JSON"
+# DX12/Vulkan renderers (KosmicKrisp, vkd3d-proton, DXVK), only when KosmicKrisp has been built,
+# like DXMT above; the script also updates runner.json "renderers".
+if [ -f "$ROOT/build/kosmickrisp/out/lib/libvulkan_kosmickrisp.dylib" ]; then
+    "$ROOT/scripts/package-runner-b-dx12.sh" "$OUT"
+fi
 du -sh "$OUT"
 echo "runner: $OUT"
 if [ "$LOADER_SOURCE" = highball ]; then

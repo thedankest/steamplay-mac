@@ -1,0 +1,35 @@
+From: steamplay-mac <steamplay-mac@localhost>
+Date: Sat, 10 Oct 2026 01:10:00 +0200
+Subject: [PATCH] build: register dlls/lsteamclient (wine-11.18)
+
+Runner B port of local/0002. The sources are placed by scripts/fetch-steam-sources.sh
+--into <tree>; 11.18's makedep already parses .cpp files, so only configure changes.
+---
+--- a/configure.ac
++++ b/configure.ac
+@@ -2890,6 +2890,7 @@
+ WINE_CONFIG_MAKEFILE(dlls/localspl/tests)
+ WINE_CONFIG_MAKEFILE(dlls/localui)
+ WINE_CONFIG_MAKEFILE(dlls/localui/tests)
++WINE_CONFIG_MAKEFILE(dlls/lsteamclient)
+ WINE_CONFIG_MAKEFILE(dlls/lz32)
+ WINE_CONFIG_MAKEFILE(dlls/lz32/tests)
+ WINE_CONFIG_MAKEFILE(dlls/lzexpand.dll16)
+--- a/configure
++++ b/configure
+@@ -1244,6 +1244,7 @@
+ enable_loadperf
+ enable_localspl
+ enable_localui
++enable_lsteamclient
+ enable_lz32
+ enable_magnification
+ enable_mapi32
+@@ -22444,6 +22445,7 @@
+ wine_fn_config_makefile dlls/localspl/tests enable_tests
+ wine_fn_config_makefile dlls/localui enable_localui
+ wine_fn_config_makefile dlls/localui/tests enable_tests
++wine_fn_config_makefile dlls/lsteamclient enable_lsteamclient
+ wine_fn_config_makefile dlls/lz32 enable_lz32
+ wine_fn_config_makefile dlls/lz32/tests enable_tests
+ wine_fn_config_makefile dlls/lzexpand.dll16 enable_win16

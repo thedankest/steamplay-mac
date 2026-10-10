@@ -13,6 +13,8 @@
 #   install.sh uninstall [--remove-runners] [--remove-global-env] [--remove-prefixes]
 #                                  restore Valve's Steam.app from the backup, undo everything else
 #   install.sh reapply [--auto]    after a Steam update (the Phase 5 LaunchAgent runs this)
+#   install.sh watch on|off|status the Phase 5 LaunchAgent: runs reapply --auto at login, when
+#                                  Steam's client or Steam.app changes, and every 6 hours
 #   install.sh status
 #   install.sh journal-clear       mark an interrupted run as handled (after doctor checks out)
 # Low-level (kept for compatibility):
@@ -157,6 +159,14 @@ np_on_exit() {
         *) st=fail ;;
     esac
     [ -n "$NP_OP" ] && np_result "$st" "$rc" "${NP_RESULT_DETAIL:-$NP_DIE_MSG}"
+    # Under the watcher nobody reads the output: a failure that sent no notification of its own
+    # gets one, once per message.
+    if [ "${NP_AUTO:-0}" = 1 ] && [ "$rc" != 0 ] && [ "${NP_NOTIFIED:-0}" != 1 ]; then
+        p="$NP_SUPPORT/logs/.auto-notified-$(printf '%s' "${NP_DIE_MSG:-exit $rc}" | shasum -a 256 | cut -c1-16)"
+        if [ ! -e "$p" ] && mkdir -p "$NP_SUPPORT/logs" && touch "$p"; then
+            np_notify "Steam Play's check after a Steam update stopped: ${NP_DIE_MSG:-exit $rc}. Run install.sh doctor for details."
+        fi
+    fi
     np_unlock
     exit "$rc"
 }
@@ -212,6 +222,7 @@ plan_text_all() { # from runner-version profile
     esac
     printf -- '- notproton.dylib goes into Steam.app with an Info.plist insert, and Steam.app is re-signed ad hoc. That replaces Valve'"'"'s signature until uninstall restores the backup; macOS may ask again for Input Monitoring.\n'
     printf -- '- Steam bootstrapper updates are blocked in both steam.cfg files (previous versions kept).\n'
+    printf -- '- A LaunchAgent (%s) runs install.sh reapply --auto after Steam updates. It never changes Steam.app itself; when Valve replaced Steam.app it asks first and opens Terminal.\n' "$NP_AGENT_LABEL"
     printf -- '- Runner: %s %s into %s/runners.\n' "$1" "$2" "$NP_SUPPORT"
     if [ -n "${NP_GPTK_DMG:-}" ]; then
         printf -- '- D3DMetal from %s (Apple GPTK disk image; its licence is shown first).\n' "$NP_GPTK_DMG"
@@ -265,7 +276,7 @@ support_build() { # stage
         np_quiet swiftc -O -target arm64-apple-macos14.0 -framework AppKit -framework IOKit \
             -o "$st/syshud" "$ROOT/notproton/helpers/syshud.swift" || { warn "syshud build failed"; return 1; }
     fi
-    cp -f "$NP_SIG_SRC"/*.json "$st/signatures/macos.arm64/" || { warn "no signatures in $NP_SIG_SRC"; return 1; }
+    gate_stage_profiles "$st/signatures/macos.arm64" || return 1
     for f in "$NP_FIXES_SRC"/*.sh; do
         [ -f "$f" ] || continue
         if sh -n "$f" 2>/dev/null; then cp -f "$f" "$st/fixes/" || return 1; else warn "fix ${f##*/} does not parse (sh -n); skipped"; fi
@@ -576,7 +587,7 @@ cmd_all() {
         runner_valid_id "$rv" || step_fail "runner id '$rv' must be letters, digits, '.', '_', '-'"
         [ -f "$NP_DIST_DIR/$rv/runner.json" ] || step_fail "no local runner at $NP_DIST_DIR/$rv (build it with scripts/build-all.sh, or use --from release)"
     fi
-    profile="$(find "$NP_SIG_SRC" -name '*.json' | wc -l | tr -d ' ') profiles in the repo"
+    profile="$(gate_profile_total) profiles in the repo"
     step_end ok "Steam.app is $CLASS ($(sa_version "$NP_STEAM_APP")); runner $from $rv"
     plan="$(plan_text_all "$from" "$rv" "$profile")"
 
@@ -649,6 +660,12 @@ cmd_all() {
     journal_end "done"
     step_end ok "runners/current -> $RUNNER_VER"
 
+    step_start watch "Steam update watcher (LaunchAgent)"
+    if [ "$(state_get '.watch.off_by_user')" = true ]; then
+        step_end skip "turned off with install.sh watch off; install.sh watch on turns it back on"
+    elif watch_install; then step_end ok "$WATCH_DETAIL"
+    else step_end warn "$WATCH_DETAIL; run install.sh watch on later"; fi
+
     step_start verify "Checking that Steam loads it"
     verify_flow
     next_steps
@@ -660,10 +677,130 @@ cmd_all() {
 }
 
 # ---------------------------------------------------------------------------------------------
+# Phase 5 watcher. The LaunchAgent runs a copy of scripts/watch.sh from the support dir with the
+# path of this install.sh; the copy and the plist go away with watch off and with uninstall.
+watch_plist() { printf '%s/%s.plist' "$NP_LAUNCH_AGENTS" "$NP_AGENT_LABEL"; }
+watch_script() { printf '%s/tools/steamplay-watch.sh' "$NP_SUPPORT"; }
+watch_xml() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
+
+watch_plist_text() {
+    cat <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>$(watch_xml "$NP_AGENT_LABEL")</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>$(watch_xml "$(watch_script)")</string>
+        <string>$(watch_xml "$ROOT/scripts/install.sh")</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key><string>/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin</string>
+        <key>NP_HOME</key><string>$(watch_xml "$NP_HOME")</string>
+        <key>NP_STEAM_APP</key><string>$(watch_xml "$NP_STEAM_APP")</string>
+        <key>NP_STEAM_SUPPORT</key><string>$(watch_xml "$NP_STEAM_SUPPORT")</string>
+        <key>NP_SUPPORT</key><string>$(watch_xml "$NP_SUPPORT")</string>
+        <key>NP_BACKUP_DIR</key><string>$(watch_xml "$NP_BACKUP_DIR")</string>
+    </dict>
+    <key>WatchPaths</key>
+    <array>
+        <string>$(watch_xml "$NP_INNER_MACOS/steamclient.dylib")</string>
+        <string>$(watch_xml "$NP_INNER_MACOS/steamui.dylib")</string>
+        <string>$(watch_xml "$NP_STEAM_APP/Contents/Info.plist")</string>
+    </array>
+    <key>RunAtLoad</key><true/>
+    <key>StartInterval</key><integer>21600</integer>
+    <key>ThrottleInterval</key><integer>300</integer>
+    <key>ProcessType</key><string>Background</string>
+    <key>LowPriorityIO</key><true/>
+    <key>Nice</key><integer>10</integer>
+    <key>StandardOutPath</key><string>$(watch_xml "$NP_SUPPORT/logs/watch.log")</string>
+    <key>StandardErrorPath</key><string>$(watch_xml "$NP_SUPPORT/logs/watch.log")</string>
+</dict>
+</plist>
+PLIST
+}
+
+watch_install() { # -> WATCH_DETAIL
+    local plist sc tmp
+    plist="$(watch_plist)"
+    sc="$(watch_script)"
+    WATCH_DETAIL=""
+    mkdir -p "$NP_LAUNCH_AGENTS" "$NP_SUPPORT/tools" "$NP_SUPPORT/logs" || { WATCH_DETAIL="cannot create $NP_LAUNCH_AGENTS"; return 1; }
+    { cp -f "$ROOT/scripts/watch.sh" "$sc.tmp" && chmod 755 "$sc.tmp" && mv -f "$sc.tmp" "$sc"; } || { WATCH_DETAIL="cannot install $sc"; return 1; }
+    tmp="$plist.tmp-$$"
+    { watch_plist_text > "$tmp" && plutil -lint -s "$tmp" && chmod 644 "$tmp"; } || { rm -f "$tmp"; WATCH_DETAIL="cannot write the LaunchAgent"; return 1; }
+    if np_test_mode; then
+        mv -f "$tmp" "$plist" || { WATCH_DETAIL="cannot write $plist"; return 1; }
+        echo "bootstrap $plist" >> "$NP_TEST_ROOT/ctl/launchctl.log"
+    else
+        launchctl bootout "gui/$(id -u)/$NP_AGENT_LABEL" >/dev/null 2>&1 || true
+        mv -f "$tmp" "$plist" || { WATCH_DETAIL="cannot write $plist"; return 1; }
+        # Right after a bootout, bootstrap can fail with "Bootstrap failed: 5" for a moment.
+        local i ok=0
+        for i in 1 2 3; do
+            if launchctl bootstrap "gui/$(id -u)" "$plist" 2>/dev/null; then ok=1; break; fi
+            sleep 1
+        done
+        [ "$ok" = 1 ] || { WATCH_DETAIL="launchctl bootstrap failed for $plist"; return 1; }
+    fi
+    # launchd runs this checkout's install.sh unattended: record which commit, and whether the
+    # tree had uncommitted changes, when the watcher was turned on.
+    state_update '.watch = ((.watch // {}) + {label: $l, plist: $p, script_sha256: $s, engine: $e, engine_commit: $c, engine_dirty: ($d == "1"), at: $__now})' \
+        --arg l "$NP_AGENT_LABEL" --arg p "$plist" --arg s "$(np_sha256 "$sc")" --arg e "$ROOT/scripts/install.sh" \
+        --arg c "$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || true)" \
+        --arg d "$([ -n "$(git -C "$ROOT" status --porcelain --untracked-files=no 2>/dev/null)" ] && echo 1 || echo 0)"
+    WATCH_DETAIL="$NP_AGENT_LABEL loaded"
+}
+
+watch_unload() { # plist
+    if np_test_mode; then echo "bootout $1" >> "$NP_TEST_ROOT/ctl/launchctl.log"
+    else launchctl bootout "gui/$(id -u)/$NP_AGENT_LABEL" >/dev/null 2>&1 || true; fi
+}
+
+watch_remove() {
+    local plist
+    plist="$(watch_plist)"
+    watch_unload "$plist"
+    rm -f "$plist" "$(watch_script)"
+    if state_exists; then state_update 'del(.watch.label, .watch.plist, .watch.script_sha256, .watch.engine, .watch.at)'; fi
+    return 0
+}
+
+watch_loaded() {
+    if np_test_mode; then [ -f "$(watch_plist)" ]; return; fi
+    launchctl print "gui/$(id -u)/$NP_AGENT_LABEL" >/dev/null 2>&1
+}
+
+cmd_watch() {
+    case "${1:-status}" in
+        on)
+            np_begin watch
+            [ -n "$(state_get '.steam.patched.at')" ] || np_die "install.sh all has not completed here; the watcher has nothing to re-apply"
+            watch_install || np_die "$WATCH_DETAIL"
+            state_update '.watch.off_by_user = false'
+            say "watcher on: $WATCH_DETAIL ($(watch_plist))" ;;
+        off)
+            np_begin watch
+            watch_remove
+            state_update '.watch = ((.watch // {}) + {off_by_user: true})'
+            say "watcher off (install.sh all keeps it off until install.sh watch on)" ;;
+        status)
+            if watch_loaded; then echo "watcher: on ($(watch_plist))"; else echo "watcher: off"; fi
+            if [ -f "$NP_SUPPORT/logs/watch.log" ]; then tail -3 "$NP_SUPPORT/logs/watch.log"; fi
+            return 0 ;;
+        *) np_die "watch: on, off or status" ;;
+    esac
+}
+
+# ---------------------------------------------------------------------------------------------
 cmd_reapply() {
-    local auto=0 class cd sc_old ui_old cd_old stage plan rc
+    local auto=0 class cd sc_old ui_old cd_old stage plan rc fp msg
     while [ $# -gt 0 ]; do
-        case "$1" in --auto) auto=1 ;; *) np_die "reapply: unknown option $1" ;; esac
+        case "$1" in --auto) auto=1; NP_AUTO=1 ;; *) np_die "reapply: unknown option $1" ;; esac
         shift
     done
     np_begin reapply
@@ -681,25 +818,49 @@ cmd_reapply() {
         NP_RESULT_DETAIL=unchanged
         return 0
     fi
-    journal_begin reapply
-
-    step_start gate "Checking the updated client against the signatures"
     stage="$NP_SUPPORT/.staging-sigs-$$"
     np_cleanup_add "$stage"
     rm -rf "$stage"
-    mkdir -p "$stage/signatures/macos.arm64" || step_fail "cannot stage the signatures"
-    cp -f "$NP_SIG_SRC"/*.json "$stage/signatures/macos.arm64/" || step_fail "no signatures in $NP_SIG_SRC"
+    gate_stage_profiles "$stage/signatures/macos.arm64" || np_die "cannot stage the signature profiles"
+    fp="$(gate_fingerprint "$stage/signatures/macos.arm64" "$NP_SUPPORT/tools/anchorcheck")"
+    # The watcher runs this on every change and at login: a failure it already reported, or a
+    # re-apply the user said "Not now" to within a day, is not shown again.
+    if [ "$auto" = 1 ] && [ "$fp" = "$(state_get '.watch.reported_fail')" ]; then
+        say "already reported: no signature profile fits this client (tools/make-signatures.md)"
+        NP_RESULT_DETAIL=already_reported
+        return 0
+    fi
+    if [ "$auto" = 1 ] && [ "$class" = pristine ] && [ "$cd" = "$(state_get '.watch.declined.cdhash')" ] \
+        && [ $(( $(date +%s) - $(state_get '.watch.declined.epoch // 0') )) -lt "$NP_WATCH_ASK_AGAIN" ]; then
+        say "re-apply was declined for this Steam.app less than $((NP_WATCH_ASK_AGAIN / 3600)) h ago"
+        NP_RESULT_DETAIL=declined_recently
+        return 0
+    fi
+    # --auto never changes Steam.app (a Valve bundle goes to Terminal below), so it opens no journal.
+    [ "$auto" = 1 ] || journal_begin reapply
+
+    step_start gate "Checking the updated client against the signatures"
     if ! gate_run "$stage" "$NP_SUPPORT/tools/anchorcheck"; then
         gate_record fail
+        if [ "$GATE_NOLIVE" = 1 ] || [ -n "$GATE_PROFILE" ]; then
+            # A real answer about this client (no profile fits, or the fitting one fails): the
+            # watcher reports it once. Anything else (anchorcheck missing, the client not loadable
+            # mid-update) is retried on the next run.
+            [ "$auto" = 1 ] && state_update '.watch = ((.watch // {}) + {reported_fail: $f})' --arg f "$fp"
+            msg="Steam was updated and no signature profile fits the new client."
+        else
+            msg="Steam Play could not check Steam's client against the signatures; it tries again on the next check."
+        fi
         if [ "$class" = ours ]; then
             signatures_disable "gate failed after a Steam update: $GATE_DETAIL"
-            np_notify "Steam was updated and no signature profile fits the new client. Steam Play is switched off (no hooks load) and Steam.app was not changed. Details: $GATE_DETAIL"
+            np_notify "$msg Steam Play is switched off (no hooks load) and Steam.app was not changed. Details: $GATE_DETAIL"
         else
-            np_notify "Steam was updated and no signature profile fits the new client. Steam.app was not changed. Details: $GATE_DETAIL"
+            np_notify "$msg Steam.app was not changed. Details: $GATE_DETAIL"
         fi
         step_fail "$GATE_DETAIL; Steam.app not changed"
     fi
     gate_record pass
+    state_update '.watch = ((.watch // {}) | del(.reported_fail))'
     step_end ok "$GATE_DETAIL"
 
     case "$class" in
@@ -709,19 +870,42 @@ cmd_reapply() {
             step_end ok "$GATE_PROFILE"
             step_start block_updates "Blocking Steam bootstrapper updates"
             if cfg_block_all; then step_end ok "outer and inner steam.cfg"; else step_end warn "update blocking incomplete"; fi
+            [ "$auto" = 1 ] && np_notify "Steam's client was updated (build $GATE_BUILD). Steam Play was re-applied; it is active from the next Steam start."
             ;;
         pristine)
             [ -f "$NP_SUPPORT/notproton.dylib" ] || step_fail "no installed notproton.dylib; run install.sh all"
             CLASS=pristine
-            plan="$(printf 'Steam replaced Steam.app with a new Valve version (%s). Re-apply Steam Play: quit Steam, back up the new Steam.app to %s/Steam.app.<date> (verified), patch it and re-sign it ad hoc.' \
-                "$(sa_version "$NP_STEAM_APP")" "$NP_BACKUP_DIR")"
+            plan="$(printf 'Steam replaced %s with a new Valve version (%s). Re-apply Steam Play: quit Steam, back up the new Steam.app to %s/Steam.app.<date> (verified), patch it and re-sign it ad hoc.' \
+                "$NP_STEAM_APP" "$(sa_version "$NP_STEAM_APP")" "$NP_BACKUP_DIR")"
             step_start confirm "Confirmation"
             rc=0
             if [ "$auto" = 1 ]; then
-                np_dialog reapply "$plan" || rc=1
-            else
-                np_confirm plan "$plan" || rc=$?
+                # The watcher runs from launchd, where macOS's App Management permission (needed
+                # to change Steam.app) is not the one granted to Terminal. "Re-apply" opens
+                # Terminal with an interactive install.sh reapply, which shows this plan again.
+                np_dialog reapply "$(printf '%s\n\nRe-apply opens Terminal, which shows these steps again and asks before changing anything.' "$plan")" || rc=$?
+                case "$rc" in
+                    0)
+                        step_end ok "opening Terminal for install.sh reapply"
+                        NP_RESULT_DETAIL=handed_to_terminal
+                        np_unlock
+                        np_open_terminal_reapply || np_notify "Could not open Terminal. To re-apply Steam Play, run: $ROOT/scripts/install.sh reapply" ;;
+                    1)
+                        state_update '.watch = ((.watch // {}) + {declined: {cdhash: $c, epoch: ($e|tonumber)}})' --arg c "$cd" --arg e "$(date +%s)"
+                        step_end skip "not now; nothing changed"
+                        NP_RESULT_DETAIL="declined" ;;
+                    *)
+                        # No answer: ask again on the next run, and say so once in Notification Center.
+                        if [ "$cd" != "$(state_get '.watch.unanswered_cdhash')" ]; then
+                            state_update '.watch = ((.watch // {}) + {unanswered_cdhash: $c})' --arg c "$cd"
+                            np_notify "Steam replaced Steam.app with a new version, so Steam Play is off. The re-apply question went unanswered; it comes back at the next check, or run: $ROOT/scripts/install.sh reapply"
+                        fi
+                        step_end skip "no answer; nothing changed"
+                        NP_RESULT_DETAIL="unanswered" ;;
+                esac
+                return 0
             fi
+            np_confirm plan "$plan" || rc=$?
             case "$rc" in
                 0) step_end ok "confirmed" ;;
                 3) step_end warn "needs confirmation"; exit 3 ;;
@@ -735,7 +919,7 @@ cmd_reapply() {
             if cfg_block_all; then step_end ok "outer and inner steam.cfg"; else step_end warn "update blocking incomplete"; fi
             journal_end "done"
             step_start verify "Checking that Steam loads it"
-            if [ "$auto" = 1 ]; then verify_flow auto; else verify_flow; fi
+            verify_flow
             if [ "$VERIFY_FAILED" = 1 ]; then
                 NP_DIE_MSG="re-applied, but the check in notproton.log failed: $VERIFY_DETAIL"
                 exit 1
@@ -789,9 +973,9 @@ remove_support_files() {
     done
     rm -rf "$NP_SUPPORT/signatures" "$NP_SUPPORT"/signatures.disabled-* "$NP_SUPPORT/tools" "$NP_SUPPORT/bridge" "$NP_SUPPORT/fixes" "$NP_SUPPORT/autofix"
     rm -rf "$NP_TOOL_DIR"
-    plist="$NP_LAUNCH_AGENTS/$NP_AGENT_LABEL.plist"
+    plist="$(watch_plist)"
     if [ -f "$plist" ]; then
-        np_test_mode || launchctl bootout "gui/$(id -u)" "$plist" >/dev/null 2>&1 || true
+        watch_unload "$plist"
         rm -f "$plist"
     fi
 }
@@ -1053,6 +1237,13 @@ cmd_doctor() {
         dr client_changed warn "Steam's client changed since install: run install.sh reapply"
     fi
     doctor_last_session
+    if ! watch_loaded; then
+        dr watch warn "no Steam update watcher: run install.sh watch on"
+    elif [ "$(np_sha256 "$(watch_script)" 2>/dev/null)" = "$(np_sha256 "$ROOT/scripts/watch.sh")" ]; then
+        dr watch ok "$NP_AGENT_LABEL loaded; reapply runs after Steam updates"
+    else
+        dr watch warn "the installed watcher differs from scripts/watch.sh: run install.sh watch on"
+    fi
 
     want="$(state_get '.support.run_script_sha256')"
     if [ ! -f "$NP_TOOL_DIR/run" ]; then dr run_script warn "no compatibility tool yet: Steam has not started with the dylib"
@@ -1236,7 +1427,7 @@ cmd_support() {
     f="$NP_SUPPORT/.staging-sigs-$$"
     np_cleanup_add "$f"
     rm -rf "$f"
-    mkdir -p "$f/signatures/macos.arm64" && cp -f "$NP_SIG_SRC"/*.json "$f/signatures/macos.arm64/" || np_die "cannot stage the signatures"
+    gate_stage_profiles "$f/signatures/macos.arm64" || np_die "cannot stage the signatures"
     gate_run "$f" "$ROOT/notproton/out/anchorcheck" || np_die "signature gate failed: $GATE_DETAIL"
     signatures_install "$f/signatures/macos.arm64" "$GATE_PROFILE" || np_die "could not install the signature profile"
     echo "signatures: $GATE_PROFILE ($GATE_DETAIL)"
@@ -1272,7 +1463,7 @@ cmd_steam() {
     stage="$NP_SUPPORT/.staging-sigs-$$"
     np_cleanup_add "$stage"
     rm -rf "$stage"
-    mkdir -p "$stage/signatures/macos.arm64" && cp -f "$NP_SIG_SRC"/*.json "$stage/signatures/macos.arm64/" || np_die "cannot stage the signatures"
+    gate_stage_profiles "$stage/signatures/macos.arm64" || np_die "cannot stage the signatures"
     if ! gate_run "$stage" "$NP_SUPPORT/tools/anchorcheck"; then
         gate_record fail
         [ "$class" = ours ] && signatures_disable "gate failed: $GATE_DETAIL"
@@ -1329,7 +1520,7 @@ cmd_uninstall_steam() {
     say "Steam restored (ad-hoc signed; reinstall Steam from steampowered.com for Valve's signature)."
 }
 
-usage() { sed -n '2,25p' "$0"; }
+usage() { sed -n '2,27p' "$0"; }
 
 main() {
     local args=() cmd
@@ -1362,6 +1553,7 @@ main() {
         doctor) cmd_doctor "$@" ;;
         uninstall) cmd_uninstall "$@" ;;
         reapply) cmd_reapply "$@" ;;
+        watch) cmd_watch "$@" ;;
         status) cmd_status ;;
         journal-clear) cmd_journal_clear ;;
         support) NP_OP=support; cmd_support "$@" ;;

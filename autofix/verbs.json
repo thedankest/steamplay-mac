@@ -38,7 +38,7 @@
     },
     "physx": {
       "title": "NVIDIA PhysX System Software 9.23.1019 (includes the legacy 2.8.x runtime UE3 games load)",
-      "source": "winetricks load_physx (sha256 verified in source); winetricks marks it broken on Wine 9.5-9.10 (bug 56606)",
+      "source": "winetricks load_physx (sha256 verified in source); winetricks marks it broken on Wine 9.5-9.10 (bug 56606). Installed from its NVI2 manifest (PhysX/PhysX.nvi, a 7-Zip SFX payload at byte 1037047) instead of running setup.exe /s, which exits 4 on arm64 (FEX): the manifest carries <filter platform=\"amd64\"/>. Checked 2026-10-10 against setup.exe /s on Runner A: same 53 files (SHA-256), same 18 AGEIA/NVIDIA keys, same PATH; setup.exe also writes NVIDIA Installer2 bookkeeping and an Uninstall entry, which are skipped",
       "files": [
         {
           "url": "https://us.download.nvidia.com/Windows/9.23.1019/PhysX_9.23.1019_SystemSoftware.exe",
@@ -54,7 +54,9 @@
         ]}
       ],
       "steps": [
-        {"type": "exe_silent", "file": 0, "args": ["/s"]}
+        {"type": "nvi", "file": 0, "sfx_offset": 1037047, "manifest": "PhysX/PhysX.nvi",
+         "vars": ["NvidiaProgramFilesX86=C:\\Program Files (x86)\\NVIDIA Corporation",
+                  "NvidiaSoftwareKey=HKEY_LOCAL_MACHINE\\SOFTWARE\\NVIDIA Corporation"]}
       ]
     },
     "physx_legacy": {

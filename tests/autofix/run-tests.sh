@@ -103,7 +103,9 @@ cat > "$T/bin/wine" <<'EOF'
 # fake loader: records every call; "installers" create $FAKE_WINE_CREATE (prefix-relative)
 echo "$*" >> "$WINE_CALLS"
 case "$1" in
-  reg|regedit|uninstaller) exit 0 ;;
+  regedit) [ -n "${FAKE_WINE_SAVE:-}" ] && cp "$3" "$FAKE_WINE_SAVE"; exit 0 ;;
+  reg) [ "$2" = query ] && [ -n "${FAKE_WINE_PATH:-}" ] && printf '\r\nHKEY_LOCAL_MACHINE\\System\r\n    PATH    REG_EXPAND_SZ    %s\r\n' "$FAKE_WINE_PATH"; exit 0 ;;
+  uninstaller) exit 0 ;;
 esac
 [ -n "${FAKE_WINE_SLEEP:-}" ] && sleep "$FAKE_WINE_SLEEP"
 if [ -n "${FAKE_WINE_CREATE:-}" ]; then
@@ -337,6 +339,60 @@ printf 'MZ native d3dx9_43' > "$B/d3dx9_43.dll"
 "$PY" -I "$here/mkcab.py" "$V/inner_x86.cab" "d3dx9_43.dll=$B/d3dx9_43.dll"
 "$PY" -I "$here/mkcab.py" "$V/redist.cab" "Jun2010_d3dx9_43_x86.cab=$V/inner_x86.cab"
 cat "$B/game32.exe" "$V/redist.cab" > "$V/redist_sfx.exe"
+# NVI2 package (NVIDIA installer) inside a 7-Zip SFX: stub + 7z archive
+NV="$T/nvi"
+mkdir -p "$NV/Pkg/files/Common" "$NV/Pkg/files/Engine/v2.8.3"
+printf 'MZ loader32' > "$NV/Pkg/files/Common/Loader.dll"
+printf 'MZ loader64' > "$NV/Pkg/files/Common/Loader64.dll"
+printf 'MZ core' > "$NV/Pkg/files/Engine/v2.8.3/Core.dll"
+printf 'MZ cooking' > "$NV/Pkg/files/Engine/v2.8.3/NxCooking.dll"
+cat > "$NV/Pkg/Pkg.nvi.in" <<'EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<nvi name="Display.Pkg" version="${{version}}">
+    <filter name="amd64" platform="amd64" />
+  <strings>
+    <string name="version" value="1.2.3" />
+    <string name="VendorKey" value="HKEY_LOCAL_MACHINE\SOFTWARE\Vendor"/>
+    <localized locale="0x0409">
+      <string name="title" value="Pkg" />
+    </localized>
+  </strings>
+  <properties>
+    <string name="InstallLocation" value="${{ProgramFilesX86}}\Pkg" />
+  </properties>
+  <phases>
+    <!--standard phase="ignored" platform="x86">
+      <copyFile target="${{InstallLocation}}\ignored.dll" source="files\ignored.dll"/>
+    </standard-->
+    <standard phase="copyFiles" platform="x86">
+      <if filter="amd64">
+        <copyFile target="${{InstallLocation}}\Common\Loader64.dll" source="files\Common\Loader64.dll"/>
+      </if>
+      <copyFile target="${{InstallLocation}}\Common\Loader.dll" source="files\Common\Loader.dll"/>
+      <copyFile target="${{InstallLocation}}\Engine\v2.8.3\Core.dll" source="files\Engine\v2.8.3\Core.dll"/>
+      <copyFile target="${{InstallLocation}}\Engine\v2.8.3\Cooking.dll" source="files\Engine\v2.8.3\NxCooking.dll"/>
+    </standard>
+    <standard phase="addRegistries" platform="x86">
+      <addRegistry keyName="${{VendorKey}}" />
+      <addRegistry keyName="${{VendorKey}}" valueName="Core Path" type="REG_SZ" value="${{InstallLocation}}\Engine" />
+      <addRegistry keyName="${{VendorKey}}" valueName="Version" type="REG_DWORD" value="9231019" />
+      <addRegistry keyName="${{VendorKey}}\Quiet" valueName="" type="REG_SZ" value=""/>
+      <addRegistry keyName="${{VendorKey}}\Table" valueName="Libs" type="REG_MULTI_SZ" value="a.dll|b.dll" split="|" />
+    </standard>
+    <standard phase="addRegistries64" platform="amd64">
+      <addRegistry keyName="${{VendorKey}}" valueName="Build" type="REG_DWORD" value="1" />
+    </standard>
+    <standard phase="AddEnvSettings">
+      <addPath position="last" target="${{InstallLocation}}\Common" />
+    </standard>
+  </phases>
+</nvi>
+EOF
+# UTF-8 BOM, as NVIDIA ships it
+{ printf '\357\273\277'; cat "$NV/Pkg/Pkg.nvi.in"; } > "$NV/Pkg/Pkg.nvi" && rm -f "$NV/Pkg/Pkg.nvi.in"
+(cd "$NV" && bsdtar --format 7zip -cf "$NV/pkg.7z" Pkg) || exit 2
+cat "$B/game32.exe" "$NV/pkg.7z" > "$NV/pkg_sfx.exe"
+nv_off=$(stat -f %z "$B/game32.exe")
 sha() { shasum -a 256 "$1" | cut -d' ' -f1; }
 size() { stat -f %z "$1"; }
 cat > "$V/verbs.json" <<EOF
@@ -358,6 +414,15 @@ cat > "$V/verbs.json" <<EOF
     "installed": [{"any": [{"file": "drive_c/nothere.txt"}, {"find": "drive_c/Program Files (x86)/Vendor", "name": "payload.dll", "maxdepth": 3}]}],
     "steps": [{"type": "dll_override", "mode": "native,builtin", "dlls": ["a", "b"]}, {"type": "exe_silent", "file": 0, "args": ["/s", "/v/qn"], "env": ["FOO=bar"]}]},
   "instalias": {"title": "alias", "alias": "inst"},
+  "nvi": {"title": "NVI2 package",
+    "files": [{"url": "file://$NV/pkg_sfx.exe", "sha256": "$(sha "$NV/pkg_sfx.exe")", "size": $(size "$NV/pkg_sfx.exe"), "cache": "nvi/pkg_sfx.exe"}],
+    "installed": [{"find": "drive_c/Program Files (x86)/Pkg", "name": "Core.dll", "maxdepth": 4}],
+    "steps": [{"type": "nvi", "file": 0, "sfx_offset": $nv_off, "manifest": "Pkg/Pkg.nvi",
+      "vars": ["ProgramFilesX86=C:\\\\Program Files (x86)"]}]},
+  "nvibad": {"title": "NVI2 package, unresolved variable",
+    "files": [{"url": "file://$NV/pkg_sfx.exe", "sha256": "$(sha "$NV/pkg_sfx.exe")", "size": $(size "$NV/pkg_sfx.exe"), "cache": "nvi/pkg_sfx.exe"}],
+    "installed": [{"file": "drive_c/nvibad.txt"}],
+    "steps": [{"type": "nvi", "file": 0, "sfx_offset": $nv_off, "manifest": "Pkg/Pkg.nvi"}]},
   "dx": {"title": "nested cab",
     "files": [{"url": "file://$V/redist_sfx.exe", "sha256": "$(sha "$V/redist_sfx.exe")", "size": $(size "$V/redist_sfx.exe"), "cache": "dx/redist_sfx.exe"}],
     "installed": [{"file": "drive_c/windows/syswow64/d3dx9_43.dll", "native": true}],
@@ -415,6 +480,35 @@ printf 'MZ fake\0Wine builtin DLL\0' > "$P/drive_c/windows/syswow64/d3dx9_43.dll
 vrun v-dx dx
 check "verbs: Wine builtin placeholder does not count as installed" has_text "$T/v-dx.log" "autofix: verb dx: installed d3dx9_43.dll into syswow64"
 check "verbs: nested cab in a self-extracting exe extracted" cmp -s "$P/drive_c/windows/syswow64/d3dx9_43.dll" "$B/d3dx9_43.dll"
+: > "$T/wine.calls"
+vrun v-nvi nvi FAKE_WINE_SAVE="$T/nvi.reg" FAKE_WINE_PATH='%SystemRoot%\system32;%SystemRoot%'
+pf="$P/drive_c/Program Files (x86)/Pkg"
+check "verbs: nvi installed" has_line "$T/v-nvi.log" "status=0"
+check "verbs: nvi logged" has_text "$T/v-nvi.log" "autofix: verb nvi: installed 4 files and 6 registry entries from Pkg/Pkg.nvi without running its setup.exe"
+check "verbs: nvi copyFile with a renamed source" cmp -s "$pf/Engine/v2.8.3/Cooking.dll" "$NV/Pkg/files/Engine/v2.8.3/NxCooking.dll"
+check "verbs: nvi amd64 block copied" cmp -s "$pf/Common/Loader64.dll" "$NV/Pkg/files/Common/Loader64.dll"
+check "verbs: nvi commented-out phase skipped" test ! -e "$pf/ignored.dll"
+check "verbs: nvi setup.exe never run" sh -c '! grep -qi "setup.exe\|pkg_sfx" "$1"' x "$T/wine.calls"
+check "verbs: nvi one regedit call" has_line "$T/wine.calls" "regedit /S nvi.reg"
+check "verbs: nvi .reg is REGEDIT4" test "$(head -1 "$T/nvi.reg")" = REGEDIT4
+check "verbs: nvi x86 phase -> Wow6432Node" has_line "$T/nvi.reg" '[HKEY_LOCAL_MACHINE\SOFTWARE\Wow6432Node\Vendor]'
+check "verbs: nvi amd64 phase -> 64-bit view" has_line "$T/nvi.reg" '[HKEY_LOCAL_MACHINE\SOFTWARE\Vendor]'
+check "verbs: nvi REG_SZ with variables" has_line "$T/nvi.reg" '"Core Path"="C:\\Program Files (x86)\\Pkg\\Engine"'
+check "verbs: nvi REG_DWORD in hex" has_line "$T/nvi.reg" '"Version"=dword:008cdaab'
+check "verbs: nvi default value" has_line "$T/nvi.reg" '@=""'
+check "verbs: nvi REG_MULTI_SZ split on |" has_line "$T/nvi.reg" '"Libs"=hex(7):61,2e,64,6c,6c,00,62,2e,64,6c,6c,00,00'
+check "verbs: nvi addPath appended to the prefix PATH" has_line "$T/nvi.reg" "\"PATH\"=hex(2):$(printf '%s' '%SystemRoot%\system32;%SystemRoot%;C:\Program Files (x86)\Pkg\Common' | od -A n -t x1 | tr -s ' \n' ',' | sed 's/^,//; s/,$//'),00"
+check "verbs: nvi PATH read through reg query" has_text "$T/wine.calls" "reg query HKLM\\System\\CurrentControlSet\\Control\\Session Manager\\Environment /v PATH"
+rm -rf "$P/drive_c/Program Files (x86)/Pkg" "$P/notproton-verbs/nvi"
+vrun v-nvinopath nvi FAKE_WINE_SAVE="$T/nvi2.reg"
+check "verbs: nvi unreadable PATH left alone" sh -c '! grep -q PATH "$1"' x "$T/nvi2.reg"
+check "verbs: nvi unreadable PATH noted" has_text "$T/v-nvinopath.log" "cannot read the prefix PATH, leaving it alone"
+vrun v-nvibad nvibad
+check "verbs: nvi unresolved variable refused" has_line "$T/v-nvibad.log" "status=1"
+check "verbs: nvi unresolved variable named" has_text "$T/v-nvibad.log" "unresolved: ProgramFilesX86"
+check "verbs: failed step leaves a marker" grep -q failed "$P/notproton-verbs/nvibad"
+vrun v-nvibad2 nvibad
+check "verbs: failed verb not retried on the next launch" has_text "$T/v-nvibad2.log" "ran before"
 vrun v-unknown nosuchverb
 check "verbs: unknown verb -> status 2" has_line "$T/v-unknown.log" "status=2"
 
@@ -506,6 +600,45 @@ out=$(cd "$H" && log=/dev/null WINEPREFIX="$T/pfx-gl" "$SH" -e -c '
   eval "set -- $(autofix_argv "$@")"
   printf "%s|%s|%s" "$OPENSSL_ia32cap" "$fix_env" "$*"' x "$U/900002.sh" "$H/launcher/Launcher.exe")
 check "umu2np: generated fix runs (env, fix_env, argv)" test "$out" = ":~0x20000000| OPENSSL_ia32cap|$H/launcher/Launcher.exe -NoStartup"
+
+# ---- 8b. ue-audio + fex-x87 -----------------------------------------------------------------
+UE="$T/games/ue5"
+mkdir -p "$UE/My Game/Binaries/Win64"
+cp "$B/game32.exe" "$UE/MyGame.exe"
+cp "$B/game32.exe" "$UE/My Game/Binaries/Win64/My Game-Win64-Shipping.exe"
+PU="$T/pfx-ue"
+new_prefix "$PU"
+: > "$WINE_CALLS"
+scenario ueoff "$UE" "$PU" "$UE/MyGame.exe"
+check "ue-audio: off by default, no reg call" test ! -s "$WINE_CALLS"
+check "ue-audio: off by default, no marker" test ! -e "$PU/notproton-ue-audio"
+(export NOTPROTON_UE_AUDIO_BUFFERS=4; scenario ueon "$UE" "$PU" "$UE/MyGame.exe")
+check "ue-audio: CommandLineAppend set for the shipping exe" has_line "$WINE_CALLS" 'reg add HKCU\Software\Wine\AppDefaults\My Game-Win64-Shipping.exe /v CommandLineAppend /t REG_SZ /d -AudioNumBuffersToEnqueue=4 /f'
+check "ue-audio: marker records it" has_line "$PU/notproton-ue-audio" "4 My Game-Win64-Shipping.exe"
+check "ue-audio: logged" has_text "$T/ueon.log" "autofix: ue-audio: My Game-Win64-Shipping.exe gets -AudioNumBuffersToEnqueue=4"
+: > "$WINE_CALLS"
+(export NOTPROTON_UE_AUDIO_BUFFERS=4; scenario ueagain "$UE" "$PU" "$UE/MyGame.exe")
+check "ue-audio: same value again, no reg call" test ! -s "$WINE_CALLS"
+(export NOTPROTON_UE_AUDIO_BUFFERS=6; scenario ue6 "$UE" "$PU" "$UE/MyGame.exe")
+check "ue-audio: new value replaces the old one" has_line "$PU/notproton-ue-audio" "6 My Game-Win64-Shipping.exe"
+: > "$WINE_CALLS"
+scenario uedrop "$UE" "$PU" "$UE/MyGame.exe"
+check "ue-audio: unset removes the value" has_line "$WINE_CALLS" 'reg delete HKCU\Software\Wine\AppDefaults\My Game-Win64-Shipping.exe /v CommandLineAppend /f'
+check "ue-audio: unset removes the marker" test ! -e "$PU/notproton-ue-audio"
+(export NOTPROTON_UE_AUDIO_BUFFERS=lots; scenario uebad "$UE" "$PU" "$UE/MyGame.exe")
+check "ue-audio: non-number ignored" has_text "$T/uebad.log" "NOTPROTON_UE_AUDIO_BUFFERS=lots is not a number, ignored"
+(export NOTPROTON_UE_AUDIO_BUFFERS=4; scenario uenon "$G" "$PU" "$G/bin/Game.exe")
+check "ue-audio: non-UE game left alone" has_text "$T/uenon.log" "autofix: ue-audio: no *-Win64-Shipping.exe, not Unreal Engine 4/5"
+
+scenario fexoff "$G" "$P" "$G/bin/Game.exe"
+check "fex-x87: off by default" sh -c '! grep -q FEX_X87 "$1"' x "$T/fexoff.log"
+(export NOTPROTON_FEX_X87_REDUCED=1 wine_unix=/r/lib/wine/aarch64-unix; scenario fexon "$G" "$P" "$G/bin/Game.exe")
+check "fex-x87: forwarded through fix_env" has_text "$T/fexon.log" "fix_env= CX_FWD_COMPAT_GL_CTX FEX_X87REDUCEDPRECISION"
+check "fex-x87: logged on the FEX runner" has_line "$T/fexon.log" "autofix: fex-x87: set FEX_X87REDUCEDPRECISION=1"
+(export NOTPROTON_FEX_X87_REDUCED=1 wine_unix=/r/lib/wine/x86_64-unix; scenario fexros "$G" "$P" "$G/bin/Game.exe")
+check "fex-x87: Rosetta runner noted" has_text "$T/fexros.log" "this runner uses Rosetta, so it has no effect"
+(export NOTPROTON_FEX_X87_REDUCED=1 FEX_X87REDUCEDPRECISION=0; scenario fexpre "$G" "$P" "$G/bin/Game.exe")
+check "fex-x87: user value wins" has_text "$T/fexpre.log" "FEX_X87REDUCEDPRECISION=0 already set, left alone"
 
 # ---- 9. lint --------------------------------------------------------------------------------
 if command -v shellcheck >/dev/null 2>&1; then

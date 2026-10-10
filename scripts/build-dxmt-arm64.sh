@@ -48,7 +48,8 @@ TC="$WB/toolchains/llvm-mingw"
 D="${DXMT_BUILD:-$ROOT/build/dxmt-arm64}"
 LLVM="$D/toolchains/llvm-15"
 INSTALL="$D/install"
-JOBS="$(sysctl -n hw.ncpu)"
+# -j4 by default: the user games on the same Mac (DXMT_JOBS overrides, e.g. on CI).
+JOBS="${DXMT_JOBS:-4}"
 WITH_I386=1
 
 die() { echo "build-dxmt-arm64: $*" >&2; exit 1; }
@@ -289,7 +290,8 @@ stage_fetch() {
 
 stage_llvm() {
     log "LLVM 15.0.7, arm64 static libraries (airconv)"
-    if [ -f "$LLVM/lib/libLLVMCore.a" ] && [ -x "$LLVM/bin/llvm-config" ] && [ "$("$LLVM/bin/llvm-config" --version)" = 15.0.7 ]; then
+    # LLVM_BUILD_TOOLS=Off installs no llvm-config; the CMake package carries the version.
+    if [ -f "$LLVM/lib/libLLVMCore.a" ] && grep -q 'PACKAGE_VERSION "15.0.7"' "$LLVM/lib/cmake/llvm/LLVMConfigVersion.cmake" 2>/dev/null; then
         echo "already built: $LLVM"; return
     fi
     [ -d "$D/src/llvm-project-15.0.7.src/llvm" ] || die "no LLVM source (run the fetch stage)"
@@ -339,7 +341,8 @@ stage_verify() {
     for f in @rpath/winemac.so @rpath/ntdll.so; do
         otool -L "$so" | grep -q "$f" || die "winemetal.so does not link $f"
     done
-    otool -L "$so" | grep -E "$ROOT|/opt/homebrew|/usr/local" && die "build-machine paths in winemetal.so"
+    # otool -L prints the file's own path first; only the link names after it matter.
+    otool -L "$so" | tail -n +2 | grep -E "$ROOT|/opt/homebrew|/usr/local" && die "build-machine paths in winemetal.so"
     for f in d3d11 dxgi d3d10core winemetal; do
         [ -f "$INSTALL/aarch64-windows/$f.dll" ] || die "missing aarch64-windows/$f.dll"
         # ARM64X images report machine ARM64 plus an ARM64EC (CHPE) view.

@@ -76,12 +76,14 @@ np_init_paths() {
     NP_QUIT_TIMEOUT="${NP_QUIT_TIMEOUT:-60}"
     NP_POLL_INTERVAL="${NP_POLL_INTERVAL:-1}"
     NP_MIN_FREE_GB="${NP_MIN_FREE_GB:-4}"
+    NP_WATCH_ASK_AGAIN="${NP_WATCH_ASK_AGAIN:-86400}"
 
     NP_STATE_FILE="$NP_SUPPORT/install-state.json"
     NP_INNER_MACOS="$NP_STEAM_SUPPORT/Steam.AppBundle/Steam/Contents/MacOS"
     NP_INNER_PLIST="$NP_STEAM_SUPPORT/Steam.AppBundle/Steam/Contents/Info.plist"
     NP_DYLIB_LOG="$NP_SUPPORT/notproton.log"
     NP_SIG_SRC="$ROOT/notproton/signatures/macos.arm64"
+    NP_SIG_SRC_LOCAL="$ROOT/signatures/macos.arm64"
     NP_FIXES_SRC="$ROOT/fixes"
     NP_RUN_SCRIPT_SRC="$ROOT/notproton/dylib/feats/compat_run.sh"
     NP_RUNNER_LOCK="$ROOT/ci/runner-a.lock"
@@ -97,6 +99,7 @@ np_init_paths() {
         NP_CODESIGN="${NP_TEST_CODESIGN:-$NP_CODESIGN}"
         NP_LSREGISTER="${NP_TEST_LSREGISTER:-true}"
         NP_FIXES_SRC="${NP_TEST_FIXES_SRC:-$NP_FIXES_SRC}"
+        NP_SIG_SRC_LOCAL="${NP_TEST_SIG_SRC_LOCAL:-$NP_SIG_SRC_LOCAL}"
     fi
     NP_TOOL_DIR="$NP_STEAM_SUPPORT/compatibilitytools.d/notproton"
     NP_DYLIB_DST="$NP_STEAM_APP/Contents/MacOS/notproton.dylib"
@@ -214,13 +217,12 @@ np_confirm() {
 }
 
 # macOS dialog for reapply --auto; no answer within the timeout means no.
-np_dialog() { # id text -> 0 yes, 1 no
+np_dialog() { # id text -> 0 "Re-apply", 1 "Not now", 2 no answer (timeout, or the dialog failed)
     local ans
     if np_test_mode; then
         ans="${NP_TEST_DIALOG_ANSWER:-none}"
         np_log_line "test dialog $1: $ans"
-        [ "$ans" = yes ]
-        return
+        case "$ans" in yes) return 0 ;; no) return 1 ;; *) return 2 ;; esac
     fi
     ans="$(osascript - "$2" <<'OSA' 2>/dev/null || true
 on run argv
@@ -231,10 +233,30 @@ end run
 OSA
 )"
     np_log_line "dialog $1: $ans"
-    [ "$ans" = "Re-apply" ]
+    case "$ans" in "Re-apply") return 0 ;; "Not now") return 1 ;; *) return 2 ;; esac
+}
+
+# reapply --auto hands a Valve-replaced Steam.app to an interactive reapply in Terminal.
+np_open_terminal_reapply() {
+    local cmdf="$NP_SUPPORT/tools/reapply-now.command"
+    mkdir -p "$NP_SUPPORT/tools" || return 1
+    {
+        printf '#!/bin/bash\n# Written by install.sh reapply --auto: re-apply Steam Play after a Steam update.\n'
+        printf 'export NP_HOME=%q NP_STEAM_APP=%q NP_STEAM_SUPPORT=%q NP_SUPPORT=%q NP_BACKUP_DIR=%q\n' \
+            "$NP_HOME" "$NP_STEAM_APP" "$NP_STEAM_SUPPORT" "$NP_SUPPORT" "$NP_BACKUP_DIR"
+        # The watcher that opened this may still be finishing; wait for its lock.
+        printf 'for i in $(seq 30); do [ -L %q ] || break; sleep 1; done\n' "$NP_SUPPORT/.install.lock"
+        printf 'exec /bin/bash %q reapply\n' "$ROOT/scripts/install.sh"
+    } > "$cmdf.tmp" && chmod 755 "$cmdf.tmp" && mv -f "$cmdf.tmp" "$cmdf" || return 1
+    if np_test_mode; then
+        echo "open-terminal $cmdf" >> "$NP_TEST_ROOT/ctl/open.log"
+        return 0
+    fi
+    /usr/bin/open -a Terminal "$cmdf"
 }
 
 np_notify() { # text
+    NP_NOTIFIED=1
     np_log_line "notify: $1"
     np_emit "$(jq -cn --arg t "$1" '{event:"notify",text:$t}')"
     np_test_mode && return 0
