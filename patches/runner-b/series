@@ -16,3 +16,9 @@ runner-b/0020-loader-find-ntdll-from-wine-app.patch
 # Ours (B2): export winemac's macdrv_functions table for DXMT's winemetal.so. Port of
 # leonseemann/NotProton winemac-patch/dxmt_export.c (GPL-3) to the 11.18 winemac API.
 runner-b/0021-winemac-export-macdrv-functions-for-dxmt.patch
+#
+# Ours (B3): Steamworks. Port of local/0001-0003 (Valve's ntdll steamclient -> lsteamclient
+# series) and the lsteamclient build registration to 11.18; build-wine-arm64.sh places the
+# lsteamclient sources with scripts/fetch-steam-sources.sh --into after the series.
+runner-b/0022-steam-ntdll-route-steamclient-into-lsteamclient.patch
+runner-b/0023-build-register-dlls-lsteamclient.patch

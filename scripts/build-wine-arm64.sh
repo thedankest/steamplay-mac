@@ -264,6 +264,9 @@ stage_patch() {
         patch -d "$SRC" -p1 -N -s --no-backup-if-mismatch < "$p"
         echo "applied $entry"
     done < "$SERIES"
+    # B3: Valve's lsteamclient (Proton commit, content-digest pinned) with NotProton's macOS
+    # files; patch 0023 registers dlls/lsteamclient (arm64ec + i386 PE, aarch64 unix side).
+    "$ROOT/scripts/fetch-steam-sources.sh" --into "$SRC"
 }
 
 stage_configure() {

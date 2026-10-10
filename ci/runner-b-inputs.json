@@ -1,7 +1,6 @@
 {
   "_about": "Runner B (ARM64 Wine 11.18 + FEX, no Rosetta) build inputs, read by scripts/build-wine-arm64.sh and scripts/assemble-runner-b.sh with plutil. Rule 4: every input pinned by SHA-256. A sha256 of TODO-PIN makes the scripts refuse to run. Kinds: url = downloaded into downloads/ and verified; repo = a file committed here, verified before use. Keys must not contain dots (plutil key paths).",
   "_highball": "gauthierpiarrette/highball-engine at ac5cc83bb7d90b8fcca8e60a4a37fce2b9ee1d81 (main, 2026-10-06). Local clone and GitHub blob shas compared 2026-10-09: identical.",
-
   "wine": {
     "kind": "url",
     "url": "https://dl.winehq.org/wine/source/11.x/wine-11.18.tar.xz",
@@ -27,7 +26,6 @@
     "sha256": "645bcdf861db157b9057854c98797cedb477a00723429a1b996450dfb28fc6d2",
     "source": "Highball inputs-arm64.json; equals the GitHub release asset digest (gh api, 2026-10-09). FEX 2608 as libarm64ecfex.dll / libwow64fex.dll, MIT."
   },
-
   "highball-0003": {
     "kind": "repo",
     "path": "patches/highball/0003-ntdll-winedllpath-prepend.patch",
@@ -58,6 +56,18 @@
     "sha256": "53110097cfc00acd12d7b94171368ea616b650ec3aa2d85af498b88c02748bca",
     "source": "Ours (B2): port of leonseemann/NotProton winemac-patch/dxmt_export.c (d56e28e0, file sha256 66056ac5..., GPL-3, Wine 11.15) to the wine-11.18 winemac API; exports macdrv_functions for DXMT winemetal.so (slots 1, 2, 6, 7, 8 + client_cocoa_view). GPL-3 for dxmt_export.c, so winemac.so is GPL-3 as a whole."
   },
+  "runner-b-0022": {
+    "kind": "repo",
+    "path": "patches/runner-b/0022-steam-ntdll-route-steamclient-into-lsteamclient.patch",
+    "sha256": "1e063703e20170758c7e9ae2098698ff6f75b8e0bdf43ca5e2e8ec0eea65e893",
+    "source": "Ours (B3): port of patches/local/0001 and 0003 (Valve proton_11.0 ntdll steamclient series, LGPL-2.1-or-later) to wine-11.18; on the arm64 host the x86 trampolines are written through NtProtectVirtualMemory instead of mprotect(RWX)."
+  },
+  "runner-b-0023": {
+    "kind": "repo",
+    "path": "patches/runner-b/0023-build-register-dlls-lsteamclient.patch",
+    "sha256": "6ce3f01b600eebf271f3d176ca4c1ef9f5efa2126af9a939e7419c24d5e9a2cb",
+    "source": "Ours (B3): port of patches/local/0002 to wine-11.18 (configure registration only; 11.18 makedep parses .cpp)."
+  },
   "fexunixlib-darwin": {
     "kind": "repo",
     "path": "runner-b/fex/fexunixlib_darwin.cpp",
@@ -76,7 +86,6 @@
     "sha256": "c4107a399aa4b1d5adff260e871cb8f72fff9d27632abae39a7741b1c60c5854",
     "source": "Ours: thread_set_x86_64_compat is per thread on macOS and FEX asks once, so a pthread introspection hook enables hardware TSO on every thread started after FEX's request. Applied after 0001. Verified with tsoprobe x64 + i386: 0 violations (research/RUNNER-B-TSO.md)."
   },
-
   "moltenvk": {
     "kind": "url",
     "url": "https://github.com/KhronosGroup/MoltenVK/releases/download/v1.4.2/MoltenVK-macos.tar",
@@ -114,7 +123,6 @@
     "sha256": "de668509caf9e35e3cd162473441fdb29538c6d96ed080292b3cf9e6fc5d558f",
     "source": "Runner A's pin (scripts/build-deps.sh)."
   },
-
   "_dxmt": "B2 renderer, read by scripts/build-dxmt-arm64.sh. 3Shain/dxmt pinned at 7c8dee1 (PR #209 Ci/arm64x tip, merged 2026-09-17; tree c273b79a). GitHub tarballs carry no published digest, so the sha256s below were taken by `scripts/build-dxmt-arm64.sh pin` (2026-10-10) after every file matched the commit's git tree (gh api), as rule 4 asks. Submodule external/nvapi (NVIDIA/nvapi d08488f) is only needed with -Denable_nvapi and is not pinned.",
   "dxmt": {
     "kind": "url",
@@ -156,7 +164,6 @@
     "expires": "2026-12-16T05:48:29Z",
     "source": "Optional shortcut, not the build route: DXMT's own CI package job for push run 35187190160 at 7c8dee1 (zip holding dxmt-<sha>.tar.gz: gcc x86_64 + gcc x86 + clang arm64ec builds; arm64ec half linked against 3Shain's wine-11.2 tree, not ours). sha256 is GitHub's artifact digest (gh api .../artifacts, 2026-10-10). Expires with the run; never use in CI."
   },
-
   "wine-mono-x86": {
     "kind": "url",
     "url": "https://dl.winehq.org/wine/wine-mono/11.3.0/wine-mono-11.3.0-x86.msi",
