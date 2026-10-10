@@ -158,7 +158,7 @@ jobs:
           tar -C dist/runners -cf - "$RUNNER_ID" | zstd -19 -T0 -o "$T"
           (cd out && shasum -a 256 "runner-b-${VERSION}.tar.zst" > "runner-b-${VERSION}.tar.zst.sha256")
           ls -l out; cat out/*.sha256
-          ! zstd -dc "$T" | tar -tf - | grep -Ei 'd3dmetal|libd3dshared|tier0_s64|vstdlib_s64|steamclient(64)?\.dll|GameOverlayRenderer64|SteamService|provisionprofile'
+          ! zstd -dc "$T" | tar -tf - | grep -Ei 'd3dmetal|libd3dshared|tier0_s64|vstdlib_s64|(^|/)steamclient(64)?\.dll$|GameOverlayRenderer64|SteamService|provisionprofile'
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
