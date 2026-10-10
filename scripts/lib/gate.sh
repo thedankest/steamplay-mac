@@ -31,6 +31,46 @@ gate_profile() { # sigdir
     printf '%s\n' "$best"
 }
 
+# Profiles come from notproton (upstream) and from this repo's signatures/macos.arm64, which holds
+# profiles made with tools/make-signatures.py for client builds upstream does not cover yet. The
+# same file name in both with different content is an error, not a silent pick. A generated
+# profile counts only once a person marked it reviewed (make-signatures.md): the tool's own checks
+# rest on the anchor alone.
+gate_stage_profiles() { # dest dir
+    local d="$1" f n
+    mkdir -p "$d" || return 1
+    cp -f "$NP_SIG_SRC"/*.json "$d/" || { warn "no signatures in $NP_SIG_SRC"; return 1; }
+    for f in "$NP_SIG_SRC_LOCAL"/*.json; do
+        [ -f "$f" ] || continue
+        n="${f##*/}"
+        if [ "$(jq -r 'if has("generated") then (.generated.reviewed == true) else true end' "$f" 2>/dev/null)" != true ]; then
+            warn "$n was made by tools/make-signatures.py and is not marked reviewed; skipped"
+            continue
+        fi
+        if [ -e "$d/$n" ] && ! cmp -s "$f" "$d/$n"; then
+            warn "$n is in $NP_SIG_SRC and in $NP_SIG_SRC_LOCAL with different content; remove the local one"
+            return 1
+        fi
+        cp -f "$f" "$d/" || return 1
+    done
+}
+
+gate_profile_total() { # number of profiles gate_stage_profiles would stage
+    local d f
+    for d in "$NP_SIG_SRC" "$NP_SIG_SRC_LOCAL"; do
+        for f in "$d"/*.json; do if [ -f "$f" ]; then printf '%s\n' "${f##*/}"; fi; done
+    done | sort -u | wc -l | tr -d ' '
+}
+
+# One hash over everything the gate's answer depends on: the client, Steam.app, the staged
+# profiles and anchorcheck. reapply --auto uses it so the same failure is reported only once.
+gate_fingerprint() { # staged signatures dir, anchorcheck
+    {
+        printf 'sc %s\nui %s\napp %s\nac %s\n' "$GATE_SC_SHA" "$GATE_UI_SHA" "$(sa_cdhash "$NP_STEAM_APP")" "$(np_sha256 "$2" 2>/dev/null)"
+        ( cd "$1" && for f in *.json; do if [ -f "$f" ]; then printf '%s %s\n' "$f" "$(np_sha256 "$f")"; fi; done )
+    } | shasum -a 256 | cut -c1-64
+}
+
 gate_count() { # profile.json [module] -> number of signatures (non-deprecated when module given)
     if [ -n "${2:-}" ]; then
         jq --arg m "$2" '[.signatures[] | select(.deprecated != true) | select((.module // "steamclient.dylib") == $m)] | length' "$1" 2>/dev/null
